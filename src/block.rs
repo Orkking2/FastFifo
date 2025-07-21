@@ -1,11 +1,11 @@
-use crate::{EntryDescription, atomic::Atomic, cursor::Cursor};
+use crate::{atomic::Atomic, entries::EntryDescription, field::Field};
 use std::{array, cell::UnsafeCell, fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
 
 pub struct Block<T, const BLOCK_SIZE: usize> {
-    pub(crate) allocated: Atomic<Cursor<BLOCK_SIZE>>,
-    pub(crate) committed: Atomic<Cursor<BLOCK_SIZE>>,
-    pub(crate) reserved: Atomic<Cursor<BLOCK_SIZE>>,
-    pub(crate) consumed: Atomic<Cursor<BLOCK_SIZE>>,
+    pub(crate) allocated: Atomic<Field<BLOCK_SIZE>>,
+    pub(crate) committed: Atomic<Field<BLOCK_SIZE>>,
+    pub(crate) reserved: Atomic<Field<BLOCK_SIZE>>,
+    pub(crate) consumed: Atomic<Field<BLOCK_SIZE>>,
     pub(crate) entries: [UnsafeCell<MaybeUninit<T>>; BLOCK_SIZE],
 }
 
@@ -39,17 +39,17 @@ impl<T, const BLOCK_SIZE: usize> Block<T, BLOCK_SIZE> {
     }
 
     pub fn allocate_entry(&self) -> AllocState<'_, T, BLOCK_SIZE> {
-        if self.allocated.load(Ordering::SeqCst).get_offset() >= BLOCK_SIZE {
+        if self.allocated.load(Ordering::Relaxed).get_index() >= BLOCK_SIZE {
             AllocState::BlockDone
         } else {
-            let old = self.allocated.fetch_add(1, Ordering::SeqCst).get_offset();
+            let old = self.allocated.fetch_add(1, Ordering::Relaxed).get_index();
 
             if old >= BLOCK_SIZE {
                 AllocState::BlockDone
             } else {
                 AllocState::Allocated(EntryDescription {
                     block: &self,
-                    offset: old,
+                    index: old,
                     version: 0,
                 })
             }
@@ -58,24 +58,29 @@ impl<T, const BLOCK_SIZE: usize> Block<T, BLOCK_SIZE> {
 
     pub fn reserve_entry(&self) -> ReserveState<'_, T, BLOCK_SIZE> {
         loop {
-            let reserved = self.reserved.load(Ordering::SeqCst);
+            let reserved = self.reserved.load(Ordering::Relaxed);
 
-            if reserved.get_offset() < BLOCK_SIZE {
-                let committed = self.committed.load(Ordering::SeqCst);
+            if reserved.get_index() < BLOCK_SIZE {
+                // All previous writes in this block must be visible before this load.
+                let committed = self.committed.load(Ordering::Acquire);
 
-                if reserved.get_offset() == committed.get_offset() {
+                if reserved.get_index() == committed.get_index() {
                     break ReserveState::NoEntry;
                 }
-                if committed.get_offset() != BLOCK_SIZE {
-                    let allocated = self.allocated.load(Ordering::SeqCst);
-                    if allocated.get_offset() != committed.get_offset() {
+                if committed.get_index() != BLOCK_SIZE {
+                    let allocated = self.allocated.load(Ordering::Relaxed);
+                    if allocated.get_index() != committed.get_index() {
                         break ReserveState::NotAvailable;
                     }
                 }
-                if self.reserved.fetch_max(reserved + 1, Ordering::SeqCst) == reserved {
+                if self
+                    .reserved
+                    .fetch_max(reserved.overflowing_add(1), Ordering::Relaxed)
+                    == reserved
+                {
                     break ReserveState::Reserved(EntryDescription {
                         block: &self,
-                        offset: reserved.get_offset(),
+                        index: reserved.get_index(),
                         version: reserved.get_version(),
                     });
                 }
@@ -83,6 +88,42 @@ impl<T, const BLOCK_SIZE: usize> Block<T, BLOCK_SIZE> {
                 break ReserveState::BlockDone(reserved.get_version());
             }
         }
+    }
+
+    /// Drop the valid values inside self.
+    pub(crate) fn drop(&mut self) {
+        let Block {
+            allocated,
+            committed,
+            reserved,
+            consumed,
+            entries,
+        } = self;
+
+        let allocated = allocated.load(Ordering::Relaxed).get_index();
+        let committed = committed.load(Ordering::Relaxed).get_index();
+        let reserved = reserved.load(Ordering::Relaxed).get_index();
+        let consumed = consumed.load(Ordering::Relaxed).get_index();
+
+        entries.iter_mut().enumerate().for_each(|(i, t)| {
+            if i < committed && i >= reserved {
+                // This T is valid, so we must manually drop it
+                std::mem::drop(unsafe { t.get().read().assume_init_read() })
+            } else if (i >= committed && i < allocated) || (i < reserved && i >= consumed) {
+                // This value is either allocated or reserved (in use)
+                // This is undefined behaviour, so we panic
+                panic!(
+                    "Dropping block while it has an {} value",
+                    if i >= committed && i < allocated {
+                        "allocated"
+                    } else {
+                        "reserved"
+                    }
+                )
+            } else {
+                /* ignore -- uninit */
+            }
+        })
     }
 }
 
@@ -93,42 +134,37 @@ impl<T: Debug, const BLOCK_SIZE: usize> Debug for Block<T, BLOCK_SIZE> {
         //     .field("committed", &self.committed)
         //     .field("reserved", &self.reserved)
         //     .field("consumed", &self.consumed)
-        //     .finish()
-        
-        //         v Consumed
-        //         |         v Reserved
-        //         |         |  v Committed
-        //         |         |  |          v Allocated
+        //     .finish()?;
+
+        //         v Consumed (1)
+        //         |         v Reserved (2)
+        //         |         |  v Committed (3)
+        //         |         |  |          v Allocated (4)
         // [Uninit, Reserved, 0, Allocated, Uninit]
 
-        let allocated = self.allocated.load(Ordering::Relaxed).get_offset();
-        let committed = self.committed.load(Ordering::Relaxed).get_offset();
-        let consumed = self.consumed.load(Ordering::Relaxed).get_offset();
-        let reserved = self.reserved.load(Ordering::Relaxed).get_offset();
+        let allocated = self.allocated.load(Ordering::Relaxed).get_index();
+        let committed = self.committed.load(Ordering::Relaxed).get_index();
+        let consumed = self.consumed.load(Ordering::Relaxed).get_index();
+        let reserved = self.reserved.load(Ordering::Relaxed).get_index();
 
         f.debug_list()
             .entries(self.entries.iter().enumerate().map(|(i, t)| {
-                if i < committed && i >= reserved {
+                if i >= allocated
+                    || (allocated >= BLOCK_SIZE
+                        && committed >= BLOCK_SIZE
+                        && consumed >= BLOCK_SIZE
+                        && reserved >= BLOCK_SIZE)
+                {
+                    format!("Uninit")
+                } else if i >= committed {
+                    format!("Allocated")
+                } else if i >= reserved || (consumed == BLOCK_SIZE && reserved == BLOCK_SIZE) {
                     format!("{:?}", unsafe { t.get().read().assume_init() })
-                } else if i >= committed && i < allocated {
-                    "Allocated".to_string()
-                } else if i < reserved && i >= consumed {
-                    "Reserved".to_string()
+                } else if i >= consumed {
+                    format!("Reserved")
                 } else {
-                    "Uninit".to_string()
+                    format!("Uninit")
                 }
-
-                // if i < consumed.get_offset()
-                //     || i >= allocated.get_offset()
-                // {
-                //     "Uninit".to_string()
-                // } else if i >= committed.get_offset() {
-                //     "Allocated".to_string()
-                // } else if i >= reserved.get_offset() {
-                //     format!("{:?}", unsafe { t.get().read().assume_init() })
-                // } else {
-                //     "Reserved".to_string()
-                // }
             }))
             .finish()
     }

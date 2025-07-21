@@ -4,6 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[repr(align(64))]
 pub struct Atomic<T: Into<usize> + From<usize>> {
     inner: AtomicUsize,
     phantom: PhantomData<T>,
@@ -19,10 +20,6 @@ impl<T: Into<usize> + From<usize>> Atomic<T> {
 
     pub fn load(&self, order: Ordering) -> T {
         T::from(self.inner.load(order))
-    }
-
-    pub fn store(&self, val: T, order: Ordering) {
-        self.inner.store(val.into(), order)
     }
 
     pub fn fetch_add(&self, val: usize, order: Ordering) -> T {
