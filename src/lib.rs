@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![feature(specialization)]
 #![feature(unsafe_cell_access)]
 // For cohort
@@ -14,6 +13,6 @@ mod field;
 
 pub mod entries;
 pub mod mpmc;
-// pub mod transform;
+pub mod transform;
 
 pub type Result<T> = std::result::Result<T, Error>;

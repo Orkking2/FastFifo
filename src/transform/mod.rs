@@ -49,6 +49,8 @@ impl<Input, Output> IsInOutUnion for InOutUnion<Input, Output> {
     const VALUE: bool = true;
 }
 
+pub type InOutFifo<Input, Output, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> = FastFifo<InOutUnion<Input, Output>, NUM_BLOCKS, BLOCK_SIZE>;
+
 pub struct FastFifo<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
     Arc<FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE>>,
 );
@@ -56,6 +58,7 @@ pub struct FastFifo<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: 
 impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
     FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>
 {
+    // Intentionally private
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
@@ -65,7 +68,7 @@ impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
     FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>
 {
     pub fn new() -> Self {
-        todo!()
+        Self(Arc::new(FastFifoInner::new()))
     }
 
     pub fn split(
@@ -129,7 +132,8 @@ impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
     }
 
     pub fn push_t(&mut self, val: T) -> Result<()> {
-        self.get_producer_entry().map(|mut producing_entry| producing_entry.push_t(val))
+        self.get_producer_entry()
+            .map(|mut producing_entry| producing_entry.push_t(val))
     }
 }
 
@@ -146,6 +150,45 @@ impl<Input, Output, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
     }
 }
 
+pub struct MultiTransformer<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
+    FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>,
+);
+
+impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Clone
+    for MultiTransformer<T, NUM_BLOCKS, BLOCK_SIZE>
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
+    MultiTransformer<T, NUM_BLOCKS, BLOCK_SIZE>
+{
+    pub fn get_transformer_entry(&mut self) -> Result<TransformingEntry<'_, T, BLOCK_SIZE>> {
+        self.0.get_transformer_entry()
+    }
+
+    pub fn transform_t_in_place<F: FnOnce(*mut T)>(&mut self, transformer: F) -> Result<()> {
+        self.get_transformer_entry()
+            .map(|mut transforming_entry| transforming_entry.transform_t_in_place(transformer))
+    }
+
+    pub fn transform_t<F: FnOnce(T) -> T>(&mut self, transformer: F) -> Result<()> {
+        self.get_transformer_entry()
+            .map(|mut transforming_entry| transforming_entry.transform_t(transformer))
+    }
+}
+
+impl<Input, Output, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
+    MultiTransformer<InOutUnion<Input, Output>, NUM_BLOCKS, BLOCK_SIZE>
+{
+    pub fn transform<F: FnOnce(Input) -> Output>(&mut self, transformer: F) -> Result<()> {
+        self.get_transformer_entry()
+            .map(|mut transforming_entry| transforming_entry.transform(transformer))
+    }
+}
+
 pub struct SingleConsumer<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
     FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>,
 );
@@ -159,38 +202,29 @@ impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
 
     pub fn pop_t_in_place<F: FnOnce(*mut T)>(&mut self, consumer: F) -> Result<()> {
         self.get_consumer_entry()
-            .map(|mut producing_entry| producing_entry.consume_t_in_place(consumer))
+            .map(|mut producing_entry| producing_entry.pop_t_in_place(consumer))
     }
 
     pub fn pop_t(&mut self) -> Result<T> {
         let mut out = MaybeUninit::uninit();
 
-        self.pop_t_in_place(|ptr| unsafe { out.write(ptr.read()); })
-            .map(|()| unsafe { out.assume_init() })
+        self.pop_t_in_place(|ptr| unsafe {
+            out.write(ptr.read());
+        })
+        .map(|()| unsafe { out.assume_init() })
     }
 }
 
 impl<Input, Output, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>
     SingleConsumer<InOutUnion<Input, Output>, NUM_BLOCKS, BLOCK_SIZE>
 {
-    pub fn pop_in_place<F: FnOnce(*mut Output)>(&mut self, producer: F) -> Result<()> {
+    pub fn pop_in_place<F: FnOnce(*mut Output)>(&mut self, consumer: F) -> Result<()> {
         self.get_consumer_entry()
-            .map(|mut producing_entry| producing_entry.consume_output_in_place(producer))
+            .map(|mut producing_entry| producing_entry.pop_in_place(consumer))
     }
 
-    pub fn pop(&mut self, val: Input) -> Result<()> {
-        self.pop_in_place(|ptr| unsafe { ptr.write(val) })
-    }
-}
-
-pub struct MultiTransformer<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
-    FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>,
-);
-
-impl<T: IsInOutUnion, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Clone
-    for MultiTransformer<T, NUM_BLOCKS, BLOCK_SIZE>
-{
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
+    pub fn pop(&mut self) -> Result<Output> {
+        self.get_consumer_entry()
+            .map(|mut consuming_entry| consuming_entry.pop())
     }
 }
