@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    atomic::Atomic,
+    atomic::AtomicField,
     block::{AllocState, Block, ReserveState},
     entries::{ConsumingEntry, ProducingEntry},
     error::Error,
@@ -103,8 +103,8 @@ v Reserved (0)
 */
 
 pub(crate) struct FastFifoInner<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> {
-    phead: Atomic<Field<NUM_BLOCKS>>,
-    chead: Atomic<Field<NUM_BLOCKS>>,
+    phead: AtomicField<NUM_BLOCKS>,
+    chead: AtomicField<NUM_BLOCKS>,
     blocks: [Block<T, BLOCK_SIZE>; NUM_BLOCKS],
 }
 
@@ -129,7 +129,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
 
         Self {
             phead: Default::default(),
-            chead: Atomic::new(FieldConfig {
+            chead: AtomicField::new(FieldConfig {
                 ..Default::default()
             }),
             blocks: array::from_fn(|i| {
@@ -138,19 +138,19 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
                 } else {
                     // {.idx = BLOCK_SIZE}
                     Block {
-                        allocated: Atomic::new(FieldConfig {
+                        allocated: AtomicField::new(FieldConfig {
                             index: BLOCK_SIZE,
                             ..Default::default()
                         }),
-                        committed: Atomic::new(FieldConfig {
+                        committed: AtomicField::new(FieldConfig {
                             index: BLOCK_SIZE,
                             ..Default::default()
                         }),
-                        reserved: Atomic::new(FieldConfig {
+                        reserved: AtomicField::new(FieldConfig {
                             // index: BLOCK_SIZE,
                             ..Default::default()
                         }),
-                        consumed: Atomic::new(FieldConfig {
+                        consumed: AtomicField::new(FieldConfig {
                             index: BLOCK_SIZE,
                             ..Default::default()
                         }),
@@ -174,7 +174,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
     fn advance_phead(&self, ph: Field<NUM_BLOCKS>) -> AdvancePheadState {
         let ref nblk = self.blocks[(ph.get_index() + 1) % NUM_BLOCKS];
         // /* retry-new begin
-        let consumed = nblk.consumed.load(Ordering::Relaxed);
+        let consumed = nblk.consumed.load(Ordering::Acquire);
 
         if consumed.get_version() < ph.get_version()
             || (consumed.get_version() == ph.get_version() && consumed.get_index() != BLOCK_SIZE)
@@ -201,7 +201,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
             }
             .into();
 
-            nblk.committed.fetch_max(new_field, Ordering::Acquire);
+            nblk.committed.fetch_max(new_field, Ordering::Relaxed);
             nblk.allocated.fetch_max(new_field, Ordering::Relaxed);
 
             self.phead
@@ -252,7 +252,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
     }
 
     /// Try to reserve a production entry
-    pub fn try_get_producer_entry(&self) -> Result<ProducingEntry<'_, T, BLOCK_SIZE>> {
+    pub fn get_producer_entry(&self) -> Result<ProducingEntry<'_, T, BLOCK_SIZE>> {
         loop {
             let (ph, blk) = self.get_phead_and_block();
             match blk.allocate_entry() {
@@ -270,7 +270,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
 
     /// F produces T at address *mut T
     pub fn push_in_place<F: FnOnce(*mut T)>(&self, producer: F) -> Result<()> {
-        self.try_get_producer_entry()
+        self.get_producer_entry()
             .map(|mut entry| entry.produce_t_in_place(producer))
     }
 
@@ -278,7 +278,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
         self.push_in_place(|ptr| unsafe { ptr.write(val) })
     }
 
-    pub fn try_get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T, BLOCK_SIZE>> {
+    pub fn get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T, BLOCK_SIZE>> {
         loop {
             let (ch, blk) = self.get_chead_and_block();
             match blk.reserve_entry() {
@@ -300,7 +300,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
 
     /// F consumes T at address *mut T
     pub fn pop_in_place<F: FnOnce(*mut T)>(&self, consumer: F) -> Result<()> {
-        self.try_get_consumer_entry()
+        self.get_consumer_entry()
             .map(|mut entry| entry.consume_t_in_place(consumer))
     }
 

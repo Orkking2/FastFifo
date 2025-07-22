@@ -33,7 +33,7 @@ impl<'a, T, const BLOCK_SIZE: usize> ConsumingEntry<'a, T, BLOCK_SIZE> {
 
 impl<'a, T, const BLOCK_SIZE: usize> Drop for ConsumingEntry<'a, T, BLOCK_SIZE> {
     fn drop(&mut self) {
-        self.0.block.consumed.fetch_add(1, Ordering::Relaxed);
+        self.0.block.consumed.fetch_add(1, Ordering::Release);
     }
 }
 

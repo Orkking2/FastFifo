@@ -1,10 +1,7 @@
-use crate::FastFifo;
+use crate::mpmc::FastFifo;
 use std::array;
-use std::mem::ManuallyDrop;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[test]
 fn test_construct() {
@@ -56,7 +53,7 @@ fn multi_thread() {
 
     fn gen_cons_thread_task(fifo: Fifo) -> impl Fn() {
         move || {
-            for i in 0..250 {
+            for _ in 0..250 {
                 fifo.pop().unwrap();
             }
         }
@@ -64,57 +61,38 @@ fn multi_thread() {
 
     let fifo: Fifo = FastFifo::new();
 
-    println!(
-        "Starting prod threads ({:?})",
-        Instant::now().duration_since(epoch)
-    );
+    println!("Starting prod threads ({:?})", epoch.elapsed());
 
     let threads: [JoinHandle<()>; THREAD_COUNT] =
         array::from_fn(|_| std::thread::spawn(gen_prod_thread_task(fifo.clone())));
 
-    println!(
-        "Joining prod threads ({:?})",
-        Instant::now().duration_since(epoch)
-    );
+    println!("Joining prod threads ({:?})", epoch.elapsed());
 
     threads
         .into_iter()
         .for_each(|handle| handle.join().unwrap());
 
-    println!(
-        "Prod threads joined ({:?})",
-        Instant::now().duration_since(epoch)
-    );
+    println!("Prod threads joined ({:?})", epoch.elapsed());
 
     println!("Full {fifo:?}");
 
     let epoch = Instant::now();
 
-    println!(
-        "Starting cons threads ({:?})",
-        Instant::now().duration_since(epoch)
-    );
+    println!("Starting cons threads ({:?})", epoch.elapsed());
 
     let threads: [JoinHandle<()>; THREAD_COUNT] =
         array::from_fn(|_| std::thread::spawn(gen_cons_thread_task(fifo.clone())));
 
-    println!(
-        "Joining cons threads ({:?})",
-        Instant::now().duration_since(epoch)
-    );
+    println!("Joining cons threads ({:?})", epoch.elapsed());
 
     threads
         .into_iter()
         .for_each(|handle| handle.join().unwrap());
 
-    println!(
-        "Cons threads joined ({:?})",
-        Instant::now().duration_since(epoch)
-    );
+    println!("Cons threads joined ({:?})", epoch.elapsed());
 
     println!("Empty {fifo:?}");
 }
-
 
 struct DropTester {
     pub inner: usize,

@@ -1,5 +1,5 @@
 use derive_more::{From, Into};
-use std::{fmt::Debug, ops::Add};
+use std::fmt::Debug;
 
 pub struct FieldConfig {
     pub version: usize,
@@ -16,7 +16,7 @@ impl Default for FieldConfig {
     }
 }
 
-impl<const NUM_BLOCKS: usize> From<FieldConfig> for Field<NUM_BLOCKS> {
+impl<const INDEX_MAX: usize> From<FieldConfig> for Field<INDEX_MAX> {
     fn from(value: FieldConfig) -> Self {
         let FieldConfig { version, index } = value;
 
@@ -24,20 +24,20 @@ impl<const NUM_BLOCKS: usize> From<FieldConfig> for Field<NUM_BLOCKS> {
     }
 }
 
-#[derive(PartialEq, Copy, Clone, From, Into)]
-pub struct Field<const NUM_BLOCKS: usize>(usize);
+#[derive(PartialEq, PartialOrd, Copy, Clone, From, Into)]
+pub struct Field<const INDEX_MAX: usize>(usize);
 
-// BLOCK_NUM (NUM_BLOCKS) = 100 -> log_2(100) = 6.64 ~ 7 (7 bits needed to store index within 100)
+// BLOCK_NUM (INDEX_MAX) = 100 -> log_2(100) = 6.64 ~ 7 (7 bits needed to store index within 100)
 // 0b0000_0000_0000_0000_0000...0 | 000_0000
 // 0b1111_1111_1111_1111_1111...1 | 111_1111 (left shift by 7 to retrieve version (highest bits))
 
-impl<const NUM_BLOCKS: usize> Default for Field<NUM_BLOCKS> {
+impl<const INDEX_MAX: usize> Default for Field<INDEX_MAX> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const NUM_BLOCKS: usize> Field<NUM_BLOCKS> {
+impl<const INDEX_MAX: usize> Field<INDEX_MAX> {
     pub const fn new() -> Self {
         Self(0)
     }
@@ -47,43 +47,44 @@ impl<const NUM_BLOCKS: usize> Field<NUM_BLOCKS> {
     }
 
     const fn version_shift() -> u32 {
-        // log_2 (NUM_BLOCKS)
-        usize::BITS - NUM_BLOCKS.leading_zeros()
+        // log_2 (INDEX_MAX)
+        usize::BITS - INDEX_MAX.leading_zeros()
+        // 32
     }
 
     const fn index_mask() -> usize {
         !(usize::MAX << Self::version_shift())
     }
 
-    pub fn get_version(&self) -> usize {
+    pub const fn get_version(&self) -> usize {
         self.0 >> Self::version_shift()
     }
 
-    pub fn set_version(&mut self, version: usize) {
+    pub const fn set_version(&mut self, version: usize) {
         self.0 = self.get_index() | (version << Self::version_shift())
     }
 
-    pub fn get_index(&self) -> usize {
+    pub const fn get_index(&self) -> usize {
         self.0 & Self::index_mask()
     }
 
-    pub fn set_index(&mut self, index: usize) {
+    pub const fn set_index(&mut self, index: usize) {
         self.0 = self.get_version() | (index & Self::index_mask())
     }
 
-    pub fn overflowing_add(self, rhs: usize) -> Self {
+    pub const fn overflowing_add(self, rhs: usize) -> Self {
         Self(self.0 + rhs)
     }
 
     pub fn version_inc_add(self, rhs: usize) -> Self {
         Self::from(FieldConfig {
-            version: self.get_version() + (self.get_index() + rhs) / NUM_BLOCKS,
-            index: (self.get_index() + rhs) % NUM_BLOCKS,
+            version: self.get_version() + (self.get_index() + rhs) / INDEX_MAX,
+            index: (self.get_index() + rhs) % INDEX_MAX,
         })
     }
 }
 
-impl<const NUM_BLOCKS: usize> Debug for Field<NUM_BLOCKS> {
+impl<const INDEX_MAX: usize> Debug for Field<INDEX_MAX> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Field")
             .field("version", &self.get_version())
@@ -94,14 +95,14 @@ impl<const NUM_BLOCKS: usize> Debug for Field<NUM_BLOCKS> {
 
 // #[test]
 // fn Field_mask_print() {
-//     const NUM_BLOCKS: usize = 2;
+//     const INDEX_MAX: usize = 2;
 
-//     let mask = Field::<NUM_BLOCKS>::index_mask();
+//     let mask = Field::<INDEX_MAX>::index_mask();
 //     println!("{mask:064b} index mask");
-//     let version_lshift = Field::<NUM_BLOCKS>::version_shift();
+//     let version_lshift = Field::<INDEX_MAX>::version_shift();
 //     println!("{:064b} version mask", u64::MAX << version_lshift);
 
-//     let x: Field<NUM_BLOCKS> = FieldConfig {
+//     let x: Field<INDEX_MAX> = FieldConfig {
 //         index: 7,
 //         version: 4096 - 1,
 //     }

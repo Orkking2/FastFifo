@@ -1,11 +1,11 @@
-use crate::{atomic::Atomic, entries::EntryDescription, field::Field};
+use crate::{atomic::AtomicField, entries::EntryDescription};
 use std::{array, cell::UnsafeCell, fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
 
 pub struct Block<T, const BLOCK_SIZE: usize> {
-    pub(crate) allocated: Atomic<Field<BLOCK_SIZE>>,
-    pub(crate) committed: Atomic<Field<BLOCK_SIZE>>,
-    pub(crate) reserved: Atomic<Field<BLOCK_SIZE>>,
-    pub(crate) consumed: Atomic<Field<BLOCK_SIZE>>,
+    pub(crate) allocated: AtomicField<BLOCK_SIZE>,
+    pub(crate) committed: AtomicField<BLOCK_SIZE>,
+    pub(crate) reserved: AtomicField<BLOCK_SIZE>,
+    pub(crate) consumed: AtomicField<BLOCK_SIZE>,
     pub(crate) entries: [UnsafeCell<MaybeUninit<T>>; BLOCK_SIZE],
 }
 
