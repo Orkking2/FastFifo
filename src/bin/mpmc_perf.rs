@@ -28,7 +28,7 @@ fn main() {
 
     println!("Created deadline ({:?})", epoch.elapsed());
 
-    // cargo test fifo_perf --release -- --nocapture
+    // cargo run --release --bin mpmc_perf
     // NBLK = 100, BSZ = 100, NPT = NCT = 1
     // 54962870.06
     // NPT = NCT = 4
