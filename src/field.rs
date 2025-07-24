@@ -42,6 +42,14 @@ impl<const INDEX_MAX: usize> Field<INDEX_MAX> {
         Self(0)
     }
 
+    pub const fn full() -> Self {
+        Self(INDEX_MAX)
+    }
+
+    pub const fn full_minus_one() -> Self {
+        Self(INDEX_MAX - 1)
+    }
+
     pub const fn from_parts(version: usize, index: usize) -> Self {
         Self((version << Self::version_shift()) | (index & Self::index_mask()))
     }
@@ -98,14 +106,14 @@ impl<const INDEX_MAX: usize> Debug for Field<INDEX_MAX> {
 //     const INDEX_MAX: usize = 2;
 
 //     let mask = Field::<INDEX_MAX>::index_mask();
-//     println!("{mask:064b} index mask");
+//     
 //     let version_lshift = Field::<INDEX_MAX>::version_shift();
-//     println!("{:064b} version mask", u64::MAX << version_lshift);
+//     
 
 //     let x: Field<INDEX_MAX> = FieldConfig {
 //         index: 7,
 //         version: 4096 - 1,
 //     }
 //     .into();
-//     println!("{:064b} raw of {x:?}", x.0);
+//     
 // }

@@ -1,13 +1,13 @@
-use crate::{field::Field, transform::layer::Layer};
+use crate::{field::Field, transform::config::FifoTag};
 use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Copy)]
-pub struct WideField<const INDEX_MAX: usize> {
+pub struct WideField<const INDEX_MAX: usize, Tag: FifoTag> {
     inner: Field<INDEX_MAX>,
-    layer: Layer,
+    tag: Tag,
 }
 
-impl<const INDEX_MAX: usize> Deref for WideField<INDEX_MAX> {
+impl<const INDEX_MAX: usize, Tag: FifoTag> Deref for WideField<INDEX_MAX, Tag> {
     type Target = Field<INDEX_MAX>;
 
     fn deref(&self) -> &Self::Target {
@@ -15,25 +15,18 @@ impl<const INDEX_MAX: usize> Deref for WideField<INDEX_MAX> {
     }
 }
 
-impl<const INDEX_MAX: usize> DerefMut for WideField<INDEX_MAX> {
+impl<const INDEX_MAX: usize, Tag: FifoTag> DerefMut for WideField<INDEX_MAX, Tag> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<const INDEX_MAX: usize> WideField<INDEX_MAX> {
-    pub const fn new(layer: Layer) -> Self {
-        Self {
-            inner: Field::new(),
-            layer,
-        }
+impl<const INDEX_MAX: usize, Tag: FifoTag> WideField<INDEX_MAX, Tag> {
+    pub const fn from_parts(field: Field<INDEX_MAX>, tag: Tag) -> Self {
+        Self { inner: field, tag }
     }
 
-    pub const fn from_parts(field: Field<INDEX_MAX>, layer: Layer) -> Self {
-        Self { inner: field, layer }
-    }
-
-    pub const fn get_layer(&self) -> Layer {
-        self.layer
+    pub fn get_tag(&self) -> Tag {
+        self.tag.clone()
     }
 }

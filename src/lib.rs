@@ -1,8 +1,11 @@
 #![feature(specialization)]
 #![feature(unsafe_cell_access)]
+#![feature(macro_metavar_expr)]
 // For cohort
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+
+extern crate self as fastfifo;
 
 pub use crate::error::Error;
 

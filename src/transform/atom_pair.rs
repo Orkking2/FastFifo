@@ -22,13 +22,20 @@ impl<const BLOCK_SIZE: usize> AtomicPair<BLOCK_SIZE> {
         }
     }
 
+    pub fn full() -> Self {
+        Self {
+            take: AtomicUsize::new(BLOCK_SIZE),
+            give: AtomicUsize::new(BLOCK_SIZE),
+        }
+    }
+
     pub fn load_take(&self) -> Field<BLOCK_SIZE> {
         Field::from(self.take.load(Ordering::Relaxed))
     }
 
-    pub fn incr_take(&self) {
-        self.take.fetch_add(1, Ordering::Relaxed);
-    }
+    // pub fn incr_take(&self) {
+    //     self.take.fetch_add(1, Ordering::Relaxed);
+    // }
 
     pub fn fetch_max_take(&self, val: Field<BLOCK_SIZE>) -> Field<BLOCK_SIZE> {
         Field::from(self.take.fetch_max(val.into(), Ordering::Relaxed))
