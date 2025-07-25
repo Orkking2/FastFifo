@@ -45,6 +45,7 @@ dependencies = [
 [[package]]
 name = "fastfifoprocmacro"
 version = "0.1.0"
+source = "git+https://github.com/Orkking2/FastFifoProcMacro.git#ee831f6cd693957b8fea6b6fcdff14e193f947e1"
 dependencies = [
  "derive-syn-parse",
  "proc-macro2",
