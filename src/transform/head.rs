@@ -15,21 +15,21 @@ pub trait Atomic<const NUM_BLOCKS: usize, Tag: FifoTag> {
 /// For SP or SC
 #[repr(C)]
 pub struct NonAtomicHead<const NUM_BLOCKS: usize, Tag: FifoTag> {
-    inner: UnsafeCell<Field<NUM_BLOCKS>>,
+    inner: Field<NUM_BLOCKS>,
     tag: Tag,
 }
 
 impl<const NUM_BLOCKS: usize, Tag: FifoTag> NonAtomicHead<NUM_BLOCKS, Tag> {
     pub const fn new(tag: Tag) -> Self {
         Self {
-            inner: UnsafeCell::new(Field::new()),
+            inner: Field::new(),
             tag,
         }
     }
 
     pub const fn full(tag: Tag) -> Self {
         Self {
-            inner: UnsafeCell::new(Field::full_minus_one()),
+            inner: Field::full_minus_one(),
             tag,
         }
     }
@@ -39,14 +39,15 @@ impl<const NUM_BLOCKS: usize, Tag: FifoTag> Atomic<NUM_BLOCKS, Tag>
     for NonAtomicHead<NUM_BLOCKS, Tag>
 {
     fn load(&self) -> WideField<NUM_BLOCKS, Tag> {
-        WideField::from_parts(*unsafe { self.inner.as_ref_unchecked() }, self.tag.clone())
+        WideField::from_parts(self.inner, self.tag.clone())
     }
 
     fn max(&self, rhs: Field<NUM_BLOCKS>) -> WideField<NUM_BLOCKS, Tag> {
         let old = self.load();
         if rhs > *old {
+            // Safety: This layer was chosen to be non-atomic.
             unsafe {
-                self.inner.replace(rhs);
+                (&self.inner as *const Field<NUM_BLOCKS> as *mut Field<NUM_BLOCKS>).write(rhs);
             }
         }
         old

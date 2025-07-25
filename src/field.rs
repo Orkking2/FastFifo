@@ -106,14 +106,14 @@ impl<const INDEX_MAX: usize> Debug for Field<INDEX_MAX> {
 //     const INDEX_MAX: usize = 2;
 
 //     let mask = Field::<INDEX_MAX>::index_mask();
-//     
+//
 //     let version_lshift = Field::<INDEX_MAX>::version_shift();
-//     
+//
 
 //     let x: Field<INDEX_MAX> = FieldConfig {
 //         index: 7,
 //         version: 4096 - 1,
 //     }
 //     .into();
-//     
+//
 // }

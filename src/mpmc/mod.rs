@@ -15,18 +15,18 @@ pub struct FastFifo<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
 );
 
 /// This type allows for the construction of a FastFifo from a CAPACITY instead of a NUM_BLOCKS.
-pub struct CohortFastFifo<T, const CAPACITY: usize, const BLOCK_SIZE: usize>(PhantomData<T>);
+// pub struct CohortFastFifo<T, const CAPACITY: usize, const BLOCK_SIZE: usize>(PhantomData<T>);
 
-pub const fn ceiling_div(lhs: usize, rhs: usize) -> usize {
-    lhs / rhs + if lhs % rhs != 0 { 1 } else { 0 }
-}
+// pub const fn ceiling_div(lhs: usize, rhs: usize) -> usize {
+//     lhs / rhs + if lhs % rhs != 0 { 1 } else { 0 }
+// }
 
-impl<T, const CAPACITY: usize, const BLOCK_SIZE: usize> CohortFastFifo<T, CAPACITY, BLOCK_SIZE> {
-    /// At least enough blocks to get CAPACITY size
-    pub fn new() -> FastFifo<T, { ceiling_div(CAPACITY, BLOCK_SIZE) }, BLOCK_SIZE> {
-        FastFifo::new()
-    }
-}
+// impl<T, const CAPACITY: usize, const BLOCK_SIZE: usize> CohortFastFifo<T, CAPACITY, BLOCK_SIZE> {
+//     /// At least enough blocks to get CAPACITY size
+//     pub fn new() -> FastFifo<T, { ceiling_div(CAPACITY, BLOCK_SIZE) }, BLOCK_SIZE> {
+//         FastFifo::new()
+//     }
+// }
 
 impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifo<T, NUM_BLOCKS, BLOCK_SIZE> {
     pub fn new() -> Self {

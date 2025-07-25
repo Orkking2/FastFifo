@@ -1,5 +1,5 @@
 use crate::block::Block;
-use std::sync::atomic::Ordering;
+use std::{mem::ManuallyDrop, sync::atomic::Ordering};
 
 /// Think of this as an allocator giving you exactly one *mut T.
 pub struct ProducingEntry<'a, T, const BLOCK_SIZE: usize>(
@@ -46,6 +46,6 @@ pub(crate) struct EntryDescription<'a, T, const BLOCK_SIZE: usize> {
 impl<'a, T, const BLOCK_SIZE: usize> EntryDescription<'a, T, BLOCK_SIZE> {
     /// Modify *mut T in-place
     pub fn modify_t_in_place<F: FnOnce(*mut T)>(&mut self, modifier: F) {
-        modifier(unsafe { self.block.entries[self.index].as_mut_unchecked() }.as_mut_ptr())
+        modifier(self.block.entries[self.index].as_ptr() as *mut T)
     }
 }

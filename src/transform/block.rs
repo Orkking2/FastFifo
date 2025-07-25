@@ -1,110 +1,114 @@
 use crate::transform::{
     atom_pair::AtomicPair,
-    config::FifoConfig,
     config::{FifoTag, IndexedDrop},
     entry_descriptor::EntryDescriptor,
 };
-use std::{array, cell::UnsafeCell};
+use std::{array, marker::PhantomData};
 
 #[repr(C)]
-pub struct Block<Config: FifoConfig>
-where
-    [(); <Config as FifoConfig>::BLOCK_SIZE]:,
-    [(); <Config as FifoConfig>::NUM_BLOCKS]:,
-    [(); <Config as FifoConfig>::NUM_TRANSFORMATIONS]:,
+pub struct Block<
+    Tag: FifoTag,
+    Inner: IndexedDrop<Tag> + Default,
+    const BLOCK_SIZE: usize,
+    const NUM_TRANSFORMATIONS: usize,
+> where
+    [(); BLOCK_SIZE]:,
+    [(); NUM_TRANSFORMATIONS]:,
 {
-    atomics: [AtomicPair<{ <Config as FifoConfig>::BLOCK_SIZE }>; {
-        <Config as FifoConfig>::NUM_TRANSFORMATIONS
-    }],
-    entries: [UnsafeCell<<Config as FifoConfig>::Inner>; <Config as FifoConfig>::BLOCK_SIZE],
+    _phantom: PhantomData<Tag>,
+    atomics: [AtomicPair<BLOCK_SIZE>; NUM_TRANSFORMATIONS],
+    entries: [Inner; BLOCK_SIZE],
 }
 
-pub enum ReserveState<'a, Config: FifoConfig>
-where
-    [(); <Config as FifoConfig>::BLOCK_SIZE]:,
-    [(); <Config as FifoConfig>::NUM_BLOCKS]:,
-    [(); <Config as FifoConfig>::NUM_TRANSFORMATIONS]:,
+pub enum ReserveState<
+    'a,
+    Tag: FifoTag,
+    Inner: IndexedDrop<Tag> + Default,
+    const BLOCK_SIZE: usize,
+    const NUM_TRANSFORMATIONS: usize,
+> where
+    [(); BLOCK_SIZE]:,
+    [(); NUM_TRANSFORMATIONS]:,
 {
-    Success(EntryDescriptor<'a, Config>),
+    Success(EntryDescriptor<'a, Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>),
     NotAvailable,
     BlockDone,
     Busy,
 }
 
-impl<Config: FifoConfig> Default for Block<Config>
+impl<
+    Tag: FifoTag,
+    Inner: IndexedDrop<Tag> + Default,
+    const BLOCK_SIZE: usize,
+    const NUM_TRANSFORMATIONS: usize,
+> Default for Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>
 where
-    [(); <Config as FifoConfig>::BLOCK_SIZE]:,
-    [(); <Config as FifoConfig>::NUM_BLOCKS]:,
-    [(); <Config as FifoConfig>::NUM_TRANSFORMATIONS]:,
+    [(); BLOCK_SIZE]:,
+    [(); NUM_TRANSFORMATIONS]:,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Config: FifoConfig> Block<Config>
+impl<
+    Tag: FifoTag,
+    Inner: IndexedDrop<Tag> + Default,
+    const BLOCK_SIZE: usize,
+    const NUM_TRANSFORMATIONS: usize,
+> Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>
 where
-    [(); <Config as FifoConfig>::BLOCK_SIZE]:,
-    [(); <Config as FifoConfig>::NUM_BLOCKS]:,
-    [(); <Config as FifoConfig>::NUM_TRANSFORMATIONS]:,
+    [(); BLOCK_SIZE]:,
+    [(); NUM_TRANSFORMATIONS]:,
 {
     pub fn new() -> Self {
         Self {
+            _phantom: PhantomData,
             atomics: array::from_fn(|_| AtomicPair::new()),
-            entries: array::from_fn(|_| UnsafeCell::new(Default::default())),
+            entries: array::from_fn(|_| Default::default()),
         }
     }
 
     pub fn full_consumer() -> Self {
         Self {
+            _phantom: PhantomData,
             atomics: array::from_fn(|i| {
-                if i + 1 == <Config as FifoConfig>::NUM_TRANSFORMATIONS {
+                if i + 1 == NUM_TRANSFORMATIONS {
                     AtomicPair::full()
                 } else {
                     AtomicPair::new()
                 }
             }),
-            entries: array::from_fn(|_| UnsafeCell::new(Default::default())),
+            entries: array::from_fn(|_| Default::default()),
         }
     }
 
-    pub fn get_atomics(
-        &self,
-        tag: <Config as FifoConfig>::Tag,
-    ) -> &AtomicPair<{ <Config as FifoConfig>::BLOCK_SIZE }> {
+    pub fn get_atomics(&self, tag: Tag) -> &AtomicPair<BLOCK_SIZE> {
         &self.atomics[tag.into()]
     }
 
     pub fn get_current_chasing(
         &self,
-        tag: <Config as FifoConfig>::Tag,
-    ) -> (
-        &AtomicPair<{ <Config as FifoConfig>::BLOCK_SIZE }>,
-        &AtomicPair<{ <Config as FifoConfig>::BLOCK_SIZE }>,
-    ) {
+        tag: Tag,
+    ) -> (&AtomicPair<BLOCK_SIZE>, &AtomicPair<BLOCK_SIZE>) {
         (self.get_atomics(tag), self.get_atomics(tag.chases()))
     }
 
-    pub fn reserve_in_tag(&self, tag: <Config as FifoConfig>::Tag) -> ReserveState<'_, Config> {
+    pub fn reserve_in_layer(
+        &self,
+        tag: Tag,
+    ) -> ReserveState<'_, Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS> {
         let (current, chasing) = self.get_current_chasing(tag);
 
         loop {
             let current_take = current.load_take();
 
-            if current_take.get_index() >= <Config as FifoConfig>::BLOCK_SIZE {
+            if current_take.get_index() >= BLOCK_SIZE {
                 break ReserveState::BlockDone;
             } else {
                 let chasing_give = chasing.load_give();
 
                 if current_take.get_index() == chasing_give.get_index() {
-                    println!(
-                        "current tag {} chasing {} current_take index {} == chasing_give index {}",
-                        tag.into(),
-                        tag.chases().into(),
-                        current_take.get_index(),
-                        chasing_give.get_index()
-                    );
-
                     break ReserveState::NotAvailable;
                 } else {
                     let chasing_take = chasing.load_take();
@@ -129,23 +133,25 @@ where
 
     /// # Safety
     /// This must be the only concurrent access of self.entries[index]
-    pub unsafe fn get_ptr(&self, index: usize) -> *mut <Config as FifoConfig>::Inner {
-        self.entries[index].get()
+    pub unsafe fn get_ptr(&self, index: usize) -> *mut Inner {
+        &self.entries[index] as *const Inner as *mut Inner
     }
 }
 
-impl<Config: FifoConfig> Drop for Block<Config>
+impl<
+    Tag: FifoTag,
+    Inner: IndexedDrop<Tag> + Default,
+    const BLOCK_SIZE: usize,
+    const NUM_TRANSFORMATIONS: usize,
+> Drop for Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>
 where
-    [(); <Config as FifoConfig>::BLOCK_SIZE]:,
-    [(); <Config as FifoConfig>::NUM_BLOCKS]:,
-    [(); <Config as FifoConfig>::NUM_TRANSFORMATIONS]:,
+    [(); BLOCK_SIZE]:,
+    [(); NUM_TRANSFORMATIONS]:,
 {
     fn drop(&mut self) {
-        let x: [usize; <Config as FifoConfig>::NUM_TRANSFORMATIONS] = array::from_fn(|i| {
+        let x: [usize; NUM_TRANSFORMATIONS] = array::from_fn(|i| {
             let ref atomic_pair = self.atomics[i];
             let (give, take) = (atomic_pair.load_give(), atomic_pair.load_take());
-
-            
 
             if give.get_index() < take.get_index() {
                 panic!("attempted to drop block while there exist incomplete transformations")
@@ -162,10 +168,6 @@ where
         //         |         |           |            |          |          v [0].take (6)
         // [Uninit, Reserved, Post_Trans, Trans_Alloc, Pre_Trans, Allocated, Uninit] ->
 
-        let indexed_drop_entry = |entry: &UnsafeCell<<Config as FifoConfig>::Inner>, index| unsafe {
-            entry.get().read().indexed_drop(index)
-        };
-
         // Drop every set of entries between every current-chasing pair
         for i in 0..x.len() {
             let j = (i + x.len() - 1) % x.len();
@@ -175,7 +177,7 @@ where
 
             if current < chasing {
                 for k in current..chasing {
-                    indexed_drop_entry(&self.entries[k], i);
+                    unsafe { self.entries[k].indexed_drop(i) }
                 }
             }
         }
@@ -185,7 +187,7 @@ where
         //
         // Simply implementing a valid TryFrom<usize> for your UnionTag will change this behaviour to whatever you want!
         for k in (0..x[0]).chain(x[x.len() - 1]..self.entries.len()) {
-            indexed_drop_entry(&self.entries[k], x.len());
+            unsafe { self.entries[k].indexed_drop(x.len()) }
         }
     }
 }

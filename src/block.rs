@@ -6,7 +6,7 @@ pub struct Block<T, const BLOCK_SIZE: usize> {
     pub(crate) committed: AtomicField<BLOCK_SIZE>,
     pub(crate) reserved: AtomicField<BLOCK_SIZE>,
     pub(crate) consumed: AtomicField<BLOCK_SIZE>,
-    pub(crate) entries: [UnsafeCell<MaybeUninit<T>>; BLOCK_SIZE],
+    pub(crate) entries: [MaybeUninit<T>; BLOCK_SIZE],
 }
 
 pub enum AllocState<'a, T, const BLOCK_SIZE: usize> {
@@ -34,7 +34,7 @@ impl<T, const BLOCK_SIZE: usize> Block<T, BLOCK_SIZE> {
             committed: Default::default(),
             reserved: Default::default(),
             consumed: Default::default(),
-            entries: array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit())),
+            entries: array::from_fn(|_| MaybeUninit::uninit()),
         }
     }
 
@@ -108,7 +108,7 @@ impl<T, const BLOCK_SIZE: usize> Block<T, BLOCK_SIZE> {
         entries.iter_mut().enumerate().for_each(|(i, t)| {
             if i < committed && i >= reserved {
                 // This T is valid, so we must manually drop it
-                std::mem::drop(unsafe { t.get().read().assume_init_read() })
+                std::mem::drop(unsafe { (t as *const MaybeUninit<T>).read().assume_init_read() })
             } else if (i >= committed && i < allocated) || (i < reserved && i >= consumed) {
                 // This value is either allocated or reserved (in use)
                 // This is undefined behaviour, so we panic
@@ -159,7 +159,9 @@ impl<T: Debug, const BLOCK_SIZE: usize> Debug for Block<T, BLOCK_SIZE> {
                 } else if i >= committed {
                     format!("Allocated")
                 } else if i >= reserved || (consumed == BLOCK_SIZE && reserved == BLOCK_SIZE) {
-                    format!("{:?}", unsafe { t.get().read().assume_init() })
+                    format!("{:?}", unsafe {
+                        (t as *const MaybeUninit<T>).read().assume_init_read()
+                    })
                 } else if i >= consumed {
                     format!("Reserved")
                 } else {

@@ -1,6 +1,3 @@
-#![allow(incomplete_features)]
-#![feature(generic_const_exprs)]
-
 use fastfifoprocmacro::generate_union;
 use std::{thread::sleep, time::Duration};
 
@@ -13,11 +10,11 @@ fn main() {
         }
     }
 
-    let fifo = InOutUnionFifo::<usize, usize, 10, 10>::new();
+    let fifo = InOutUnionFifo::<usize, usize, 100, 10>::new();
     let (producer, transformer, consumer) = fifo.split();
 
     let producing_thread = std::thread::spawn(move || {
-        for i in 0..10 {
+        for i in 0..100 {
             producer.transform(|()| i).unwrap()
         }
     });
@@ -25,7 +22,7 @@ fn main() {
     let transforming_thread = std::thread::spawn(move || {
         sleep(Duration::from_millis(10));
 
-        for i in 0..10 {
+        for _ in 0..100 {
             transformer.transform(|input| input + 1).unwrap();
         }
     });
@@ -33,7 +30,7 @@ fn main() {
     let consuming_thread = std::thread::spawn(move || {
         sleep(Duration::from_millis(20));
 
-        for i in 0..10 {
+        for i in 0..100 {
             consumer
                 .transform(|output| assert_eq!(output, i + 1))
                 .unwrap();
