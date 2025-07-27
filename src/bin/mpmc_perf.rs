@@ -17,6 +17,9 @@ struct Cli {
 
     #[arg(short = 'c', long = "ncons")]
     ncons: usize,
+
+    #[arg(short = 'o', long = "nops")]
+    nops: Option<usize>,
 }
 
 // cargo run --release --bin perf --features cli -- (-n|--nprod) nprod (-c|--ncons) ncons
@@ -25,12 +28,16 @@ fn main() {
     panic!("Binary requires --features cli to compile");
 
     #[cfg(feature = "cli")]
-    let Cli { nprod, ncons } = Cli::parse();
+    let Cli { nprod, ncons, nops } = Cli::parse();
 
     #[cfg(not(feature = "cli"))]
     let (nprod, ncons) = (1, 1);
 
-    const NUM_PUSH_POP: usize = 1_000_000_000;
+    #[cfg(not(feature = "cli"))]
+    let nops: usize = 1_000_000_000;
+
+    #[cfg(feature = "cli")]
+    let nops = nops.unwrap_or(1_000_000_000);
 
     let epoch = Instant::now();
 
@@ -68,7 +75,7 @@ fn main() {
         prod_threads.push(thread::spawn(move || {
             sleep_until(deadline);
 
-            for i in 0..NUM_PUSH_POP {
+            for i in 0..nops {
                 while fifo.push(i).is_err() {
                     std::hint::spin_loop();
                 }
@@ -86,7 +93,7 @@ fn main() {
         cons_threads.push(thread::spawn(move || {
             sleep_until(deadline);
     
-            for _ in 0..NUM_PUSH_POP {
+            for _ in 0..nops {
                 while fifo.pop().is_err() {
                     std::hint::spin_loop();
                 }
@@ -110,7 +117,7 @@ fn main() {
 
     println!(
         "Estimated rate ({:.2e} ops/s)",
-        NUM_PUSH_POP as f64 * (ncons as f64 + nprod as f64)
+        nops as f64 * (ncons as f64 + nprod as f64)
             / deadline.elapsed().as_secs_f64()
     );
 }
