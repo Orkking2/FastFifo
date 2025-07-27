@@ -14,7 +14,7 @@ cli = ["clap"]
 default = ["cli"]
 
 [[bin]]
-name = "perf"
+name = "mpmc_perf"
 path = "src/bin/mpmc_perf.rs"
 required-features = ["cli"]
 

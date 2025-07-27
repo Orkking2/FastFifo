@@ -22,11 +22,8 @@ struct Cli {
     nops: Option<usize>,
 }
 
-// cargo run --release --bin perf --features cli -- (-n|--nprod) nprod (-c|--ncons) ncons
+// cargo run --release --bin mpmc_perf --features cli -- (-n|--nprod) nprod (-c|--ncons) ncons
 fn main() {
-    #[cfg(not(feature = "cli"))]
-    panic!("Binary requires --features cli to compile");
-
     #[cfg(feature = "cli")]
     let Cli { nprod, ncons, nops } = Cli::parse();
 
