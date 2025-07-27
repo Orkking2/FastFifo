@@ -1,16 +1,34 @@
 #![feature(thread_sleep_until)]
 
+#[cfg(feature = "cli")]
+use clap::Parser;
 use fastfifo::mpmc::FastFifo;
 use std::{
-    array,
-    thread::{self, JoinHandle, sleep_until},
+    thread::{self, sleep_until},
     time::{Duration, Instant},
 };
 
-// cargo run --release --bin mpmc_perf
+#[cfg(feature = "cli")]
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Cli {
+    #[arg(short = 'p', long = "nprod")]
+    nprod: usize,
+
+    #[arg(short = 'c', long = "ncons")]
+    ncons: usize,
+}
+
+// cargo run --release --bin perf --features cli -- (-n|--nprod) nprod (-c|--ncons) ncons
 fn main() {
-    const NUM_PROD_THREADS: usize = 1;
-    const NUM_CONS_THREADS: usize = 1;
+    #[cfg(not(feature = "cli"))]
+    panic!("Binary requires --features cli to compile");
+
+    #[cfg(feature = "cli")]
+    let Cli { nprod, ncons } = Cli::parse();
+
+    #[cfg(not(feature = "cli"))]
+    let (nprod, ncons) = (1, 1);
 
     const NUM_PUSH_POP: usize = 1_000_000_000;
 
@@ -43,10 +61,11 @@ fn main() {
     // NPT = NCT = 1
     // 51813049.68
 
-    let prod_threads: [JoinHandle<()>; NUM_PROD_THREADS] = array::from_fn(|_| {
+    let mut prod_threads = Vec::with_capacity(nprod);
+    for _ in 0..nprod {
         let fifo = fifo.clone();
         let deadline = deadline.clone();
-        thread::spawn(move || {
+        prod_threads.push(thread::spawn(move || {
             sleep_until(deadline);
 
             for i in 0..NUM_PUSH_POP {
@@ -54,24 +73,26 @@ fn main() {
                     std::hint::spin_loop();
                 }
             }
-        })
-    });
+        }))
+    }
 
     println!("Created prod threads ({:?})", epoch.elapsed());
 
-    let cons_threads: [JoinHandle<()>; NUM_CONS_THREADS] = array::from_fn(|_| {
+    let mut cons_threads = Vec::with_capacity(ncons);
+    for _ in 0..ncons {
         let fifo = fifo.clone();
         let deadline = deadline.clone();
-        thread::spawn(move || {
+        
+        cons_threads.push(thread::spawn(move || {
             sleep_until(deadline);
-
+    
             for _ in 0..NUM_PUSH_POP {
                 while fifo.pop().is_err() {
                     std::hint::spin_loop();
                 }
             }
-        })
-    });
+        }))
+    }
 
     println!("Created cons threads ({:?})", epoch.elapsed());
 
@@ -89,7 +110,7 @@ fn main() {
 
     println!(
         "Estimated rate ({:.2e} ops/s)",
-        NUM_PUSH_POP as f64 * (NUM_CONS_THREADS as f64 + NUM_CONS_THREADS as f64)
-            / epoch.elapsed().as_secs_f64()
+        NUM_PUSH_POP as f64 * (ncons as f64 + nprod as f64)
+            / deadline.elapsed().as_secs_f64()
     );
 }

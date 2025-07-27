@@ -3,7 +3,7 @@ use crate::{
     entries::{ConsumingEntry, ProducingEntry},
 };
 use fifo::FastFifoInner;
-use std::{fmt::Debug, marker::PhantomData, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 mod fifo;
 #[cfg(test)]

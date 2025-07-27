@@ -2,10 +2,7 @@ use crate::{
     field::Field,
     transform::{config::FifoTag, wide_field::WideField},
 };
-use std::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub trait Atomic<const NUM_BLOCKS: usize, Tag: FifoTag> {
     fn load(&self) -> WideField<NUM_BLOCKS, Tag>;

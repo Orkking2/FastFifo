@@ -1,5 +1,5 @@
 use crate::{atomic::AtomicField, entries::EntryDescription};
-use std::{array, cell::UnsafeCell, fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
+use std::{array, fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
 
 pub struct Block<T, const BLOCK_SIZE: usize> {
     pub(crate) allocated: AtomicField<BLOCK_SIZE>,

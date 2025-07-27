@@ -10,7 +10,7 @@ fn main() {
         }
     }
 
-    let fifo = InOutUnionFifo::<usize, usize, 100, 10>::new();
+    let fifo = InOutUnionFifo::<usize, usize, 10, 10>::new();
     let (producer, transformer, consumer) = fifo.split();
 
     let producing_thread = std::thread::spawn(move || {

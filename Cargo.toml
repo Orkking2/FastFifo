@@ -7,5 +7,15 @@ edition = "2024"
 derive_more = { version = "2.0.1", features = ["into", "from"] }
 paste = "1.0.15"
 fastfifoprocmacro = { git = "https://github.com/Orkking2/FastFifoProcMacro.git" }
+clap = { version = "4.5.41", features = ["derive"], optional = true }
+
+[features]
+cli = ["clap"]
+default = ["cli"]
+
+[[bin]]
+name = "perf"
+path = "src/bin/mpmc_perf.rs"
+required-features = ["cli"]
 
 [dev-dependencies]

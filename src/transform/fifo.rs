@@ -202,19 +202,21 @@ where
     }
 }
 
-impl<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const NUM_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Drop for FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); NUM_BLOCKS]:,
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
-    fn drop(&mut self) {
-        for (i, block) in self.blocks.iter_mut().enumerate() {}
-    }
-}
+// impl<
+//     Tag: FifoTag,
+//     Inner: IndexedDrop<Tag> + Default,
+//     const NUM_BLOCKS: usize,
+//     const BLOCK_SIZE: usize,
+//     const NUM_TRANSFORMATIONS: usize,
+// > Drop for FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
+// where
+//     [(); NUM_BLOCKS]:,
+//     [(); BLOCK_SIZE]:,
+//     [(); NUM_TRANSFORMATIONS]:,
+// {
+//     fn drop(&mut self) {
+//         for (_i, block) in self.blocks.iter_mut().enumerate() {
+//             block.drop()
+//         }
+//     }
+// }
