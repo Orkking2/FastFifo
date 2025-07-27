@@ -12,3 +12,5 @@ pub mod mpmc;
 pub mod transform;
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub use fastfifoprocmacro::generate_union;

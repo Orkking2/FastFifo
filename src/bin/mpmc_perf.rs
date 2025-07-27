@@ -1,6 +1,5 @@
 #![feature(thread_sleep_until)]
 
-#[cfg(feature = "cli")]
 use clap::Parser;
 use fastfifo::mpmc::FastFifo;
 use std::{
@@ -8,7 +7,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "cli")]
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Cli {
@@ -22,18 +20,9 @@ struct Cli {
     nops: Option<usize>,
 }
 
-// cargo run --release --bin mpmc_perf --features cli -- (-n|--nprod) nprod (-c|--ncons) ncons
+// cargo run --release --bin mpmc_perf -- --help
 fn main() {
-    #[cfg(feature = "cli")]
     let Cli { nprod, ncons, nops } = Cli::parse();
-
-    #[cfg(not(feature = "cli"))]
-    let (nprod, ncons) = (1, 1);
-
-    #[cfg(not(feature = "cli"))]
-    let nops: usize = 1_000_000_000;
-
-    #[cfg(feature = "cli")]
     let nops = nops.unwrap_or(1_000_000_000);
 
     let epoch = Instant::now();

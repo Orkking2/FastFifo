@@ -99,17 +99,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
-name = "derive-syn-parse"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d65d7ce8132b7c0e54497a4d9a55a1c2a0912a0d786cf894472ba818fba45762"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "derive_more"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -142,9 +131,7 @@ dependencies = [
 [[package]]
 name = "fastfifoprocmacro"
 version = "0.1.0"
-source = "git+https://github.com/Orkking2/FastFifoProcMacro.git#ee831f6cd693957b8fea6b6fcdff14e193f947e1"
 dependencies = [
- "derive-syn-parse",
  "proc-macro2",
  "quote",
  "stringcase",
