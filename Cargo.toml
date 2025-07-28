@@ -20,6 +20,6 @@ required-features = ["cli"]
 
 [[bin]]
 name = "variadic_perf"
-
+required-features = ["cli"]
 
 [dev-dependencies]
