@@ -47,10 +47,7 @@ fn main() {
             sleep_until(deadline);
 
             for i in 0..nops {
-                while 
-                fifo.transform(|()| i).is_err() 
-                {
-                    // println!("produce failed");
+                while fifo.transform(|()| i).is_err() {
                     std::hint::spin_loop();
                 }
             }
@@ -69,7 +66,6 @@ fn main() {
 
             for _ in 0..nops {
                 while fifo.transform(|input| input + 1).is_err() {
-                    // println!("transform failed");
                     std::hint::spin_loop();
                 }
             }
@@ -85,9 +81,8 @@ fn main() {
         std::thread::spawn(move || {
             sleep_until(deadline);
 
-            for _ in 0..nops {
-                while fifo.transform(|_| ()).is_err() {
-                    // println!("consume failed");
+            for i in 0..nops {
+                while fifo.transform(|output| assert_eq!(output, i + 1)).is_err() {
                     std::hint::spin_loop();
                 }
             }
