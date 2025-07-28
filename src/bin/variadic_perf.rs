@@ -1,8 +1,6 @@
 use fastfifo::generate_union;
 use std::{thread::sleep, time::Duration};
 
-
-
 fn main() {
     generate_union! {
         pub InOutUnion<Input, Output> {

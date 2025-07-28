@@ -7,7 +7,6 @@ edition = "2024"
 
 [dependencies]
 derive_more = { version = "2.0.1", features = ["into", "from"] }
-paste = "1.0.15"
 fastfifoprocmacro = { path = "./fastfifoprocmacro" }
 clap = { version = "4.5.41", features = ["derive"], optional = true }
 

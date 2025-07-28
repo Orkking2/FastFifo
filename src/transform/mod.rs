@@ -14,11 +14,6 @@ use crate::transform::{
 };
 use std::sync::Arc;
 
-#[doc(hidden)]
-pub mod __exported_macros {
-    pub use paste::paste;
-}
-
 pub use fastfifoprocmacro::generate_union;
 
 pub mod config;
