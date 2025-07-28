@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::fs;
 
+use itertools::izip;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
@@ -228,7 +229,7 @@ fn add_static_bound(mut generics: Generics) -> Generics {
     generics
 }
 
-fn _is_unit(ty: &Type) -> bool {
+fn is_unit(ty: &Type) -> bool {
     match ty {
         Type::Tuple(tuple) => tuple.elems.is_empty(),
         _ => false,
@@ -336,6 +337,77 @@ pub(crate) fn do_generate_union(
 
     let (lifetime_impl_generic, lifetime_ty_generic, _lifetime_where_clause) =
         lifetime_generics.split_for_impl();
+
+    let transform_f_trait = izip!(&chases_types, &types).map(|(chases_type, ty)| {
+        if is_unit(ty) && is_unit(chases_type) {
+            quote! {::std::ops::FnOnce()}
+        } else if is_unit(ty) {
+            quote! {::std::ops::FnOnce(#chases_type)}
+        } else if is_unit(chases_type) {
+            quote! {::std::ops::FnOnce() -> #ty}
+        } else {
+            quote! {::std::ops::FnOnce(#chases_type) -> #ty}
+        }
+    });
+
+    let variant_impls = izip!(
+        &variant_entries,
+        &chases_types,
+        &types,
+        &field_names,
+        &chases_field_names
+    )
+    .map(|(variant_entry, chases_type, ty, field_name, chases_field_name)| {
+        if is_unit(ty) && is_unit(chases_type) {
+            quote! {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                    #[allow(dead_code)]
+                    pub fn transform<F: ::std::ops::FnOnce()>(&mut self, transformer: F) { transformer() }
+                }
+            }
+        } else if is_unit(ty) {
+            quote! {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                    #[allow(dead_code)]
+                    pub fn transform<F: ::std::ops::FnOnce(#chases_type)>(&mut self, transformer: F) {
+                        self.0.modify_t_in_place(|ptr| unsafe {
+                            transformer(<#manually_drop ::<#chases_type>>::into_inner (ptr.read().#chases_field_name))
+                        })
+                    }
+                }
+            }
+        } else if is_unit(chases_type) {
+            quote! {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                    #[allow(dead_code)]
+                    pub fn transform<F: ::std::ops::FnOnce() -> #ty>(&mut self, transformer: F) {
+                        self.0.modify_t_in_place(|ptr| unsafe { ptr.write(
+                            #name {
+                                #field_name : #manually_drop ::new(transformer())
+                            }
+                        )})
+                    }
+                }
+            }
+        } else {
+            quote! {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                    #[allow(dead_code)]
+                    pub fn transform<F: ::std::ops::FnOnce(#chases_type) -> #ty>(&mut self, transformer: F) {
+                        self.0.modify_t_in_place(|ptr| unsafe { ptr.write(
+                            #name {
+                                #field_name : #manually_drop ::new(
+                                    transformer(<#manually_drop ::<#chases_type>>::into_inner (ptr.read().#chases_field_name))
+                                )
+                            }
+                        )})
+                    }
+                }
+            }
+        }
+    }).collect::<Vec<_>>();
+
+    
 
     quote! {
         #vis union #name #impl_generic #where_clause {
@@ -461,18 +533,7 @@ pub(crate) fn do_generate_union(
                 }
             }
 
-            impl #lifetime_impl_generic #variant_entries #lifetime_ty_generic #expanded_where_clause {
-                #[allow(dead_code)]
-                pub fn transform<F: ::std::ops::FnOnce(#chases_types) -> #types>(&mut self, transformer: F) {
-                    self.0.modify_t_in_place(|ptr| unsafe { ptr.write(
-                        #name {
-                            #field_names : #manually_drop ::new(
-                                transformer(<#manually_drop ::<#chases_types>>::into_inner (ptr.read().#chases_field_names))
-                            )
-                        }
-                    )})
-                }
-            }
+            #variant_impls
 
             #vis struct #variant_fifos #expanded_impl_generic (
                 #fifo_name #expanded_ty_generic
@@ -498,7 +559,7 @@ pub(crate) fn do_generate_union(
                 }
 
                 #[allow(dead_code)]
-                pub fn transform<F: ::std::ops::FnOnce(#chases_types) -> #types>(&self, transformer: F) -> #result <()> {
+                pub fn transform<F: #transform_f_trait>(&self, transformer: F) -> #result <()> {
                     self.get_entry().map(|mut entry| entry.transform(transformer))
                 }
             }

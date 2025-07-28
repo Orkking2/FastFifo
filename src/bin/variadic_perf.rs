@@ -47,7 +47,7 @@ fn main() {
             sleep_until(deadline);
 
             for i in 0..nops {
-                while fifo.transform(|()| i).is_err() {
+                while fifo.transform(|| i).is_err() {
                     std::hint::spin_loop();
                 }
             }
