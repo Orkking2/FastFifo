@@ -108,24 +108,24 @@ where
             } else {
                 let chasing_give = chasing.load_give();
 
-                if current_take.get_index() == chasing_give.get_index() {
-                    break ReserveState::NotAvailable;
-                } else {
-                    let chasing_take = chasing.load_take();
-
-                    if chasing_take.get_index() > chasing_give.get_index() {
-                        break ReserveState::Busy;
+                if current_take.get_version() >= chasing_give.get_version() {
+                    if current_take.get_index() == chasing_give.get_index() {
+                        break ReserveState::NotAvailable;
                     } else {
-                        if current.fetch_max_take(current_take.overflowing_add(1)) == current_take {
-                            break ReserveState::Success(EntryDescriptor {
-                                block: &self,
-                                index: current_take.get_index(),
-                                tag,
-                            });
-                        } else {
-                            continue;
+                        let chasing_take = chasing.load_take();
+
+                        if chasing_take.get_index() > chasing_give.get_index() {
+                            break ReserveState::Busy;
                         }
                     }
+                }
+
+                if current.fetch_max_take(current_take.overflowing_add(1)) == current_take {
+                    break ReserveState::Success(EntryDescriptor {
+                        block: &self,
+                        index: current_take.get_index(),
+                        tag,
+                    });
                 }
             }
         }

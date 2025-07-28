@@ -25,7 +25,8 @@ fn test() {
     fs::write(
         std::path::Path::new("debug_output.rs"),
         ex_output.to_string(),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 /*

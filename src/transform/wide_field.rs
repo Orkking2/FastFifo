@@ -1,7 +1,7 @@
 use crate::{field::Field, transform::config::FifoTag};
 use std::ops::{Deref, DerefMut};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct WideField<const INDEX_MAX: usize, Tag: FifoTag> {
     inner: Field<INDEX_MAX>,
     tag: Tag,

@@ -1,5 +1,5 @@
 use crate::{
-    field::FieldConfig,
+    field::{Field, FieldConfig},
     transform::{
         Result,
         block::{Block, ReserveState},
@@ -10,7 +10,7 @@ use crate::{
         wide_field::WideField,
     },
 };
-use std::array;
+use std::{array, ops::Deref};
 
 // type Tag: FifoTag;
 // type Inner: IndexedDrop + Default;
@@ -101,9 +101,10 @@ where
 
                 if tag.is_consumer(NUM_TRANSFORMATIONS - 1) {
                     if tag.is_atomic() {
-                        Box::new(AtomicHead::full(tag)) as Box<dyn Atomic<NUM_BLOCKS, Tag>>
+                        Box::new(AtomicHead::full_minus_one(tag))
+                            as Box<dyn Atomic<NUM_BLOCKS, Tag>>
                     } else {
-                        Box::new(NonAtomicHead::full(tag))
+                        Box::new(NonAtomicHead::full_minus_one(tag))
                     }
                 } else {
                     if tag.is_atomic() {
@@ -129,6 +130,7 @@ where
         &Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>,
     ) {
         let head = self.get_head(tag).load();
+
         (head.clone(), &self.blocks[head.get_index()])
     }
 
@@ -188,6 +190,8 @@ where
 
         loop {
             let (head, block) = self.get_block(tag);
+
+            // std::thread::sleep(std::time::Duration::from_millis(10));
 
             match block.reserve_in_layer(tag) {
                 ReserveState::Success(entry_descriptor) => break Ok(entry_descriptor),

@@ -1,5 +1,20 @@
+#![feature(thread_sleep_until)]
+
+use clap::Parser;
 use fastfifo::generate_union;
-use std::{thread::sleep, time::Duration};
+use std::{
+    thread::{sleep, sleep_until},
+    time::{Duration, Instant},
+};
+
+#[derive(Parser, Debug)]
+struct Cli {
+    #[arg(short = 'o', long)]
+    nops: Option<usize>,
+
+    #[arg(short = 't', long)]
+    num_trans_threads: Option<usize>,
+}
 
 fn main() {
     generate_union! {
@@ -10,34 +25,89 @@ fn main() {
         }
     }
 
-    let fifo = InOutUnionFifo::<usize, usize, 10, 10>::new();
+    let Cli {
+        nops,
+        num_trans_threads,
+    } = Cli::parse();
+
+    let nops = nops.unwrap_or(1_000_000_000);
+    let num_trans_threads = num_trans_threads.unwrap_or(1);
+
+    let epoch = Instant::now();
+    let deadline = epoch + Duration::from_millis(100);
+
+    let fifo = InOutUnionFifo::<usize, usize, 10, 10_000>::new();
     let (producer, transformer, consumer) = fifo.split();
 
-    let producing_thread = std::thread::spawn(move || {
-        for i in 0..100 {
-            producer.transform(|()| i).unwrap()
-        }
-    });
+    let producing_thread = {
+        let deadline = deadline.clone();
+        let fifo = producer;
 
-    let transforming_thread = std::thread::spawn(move || {
-        sleep(Duration::from_millis(10));
+        std::thread::spawn(move || {
+            sleep_until(deadline);
 
-        for _ in 0..100 {
-            transformer.transform(|input| input + 1).unwrap();
-        }
-    });
+            for i in 0..nops {
+                while 
+                fifo.transform(|()| i).is_err() 
+                {
+                    // println!("produce failed");
+                    std::hint::spin_loop();
+                }
+            }
+        })
+    };
 
-    let consuming_thread = std::thread::spawn(move || {
-        sleep(Duration::from_millis(20));
+    println!("Created prod thread ({:?})", epoch.elapsed());
 
-        for i in 0..100 {
-            consumer
-                .transform(|output| assert_eq!(output, i + 1))
-                .unwrap();
-        }
-    });
+    let mut trans_threads = Vec::with_capacity(num_trans_threads);
+    for _ in 0..num_trans_threads {
+        let fifo = transformer.clone();
+        let deadline = deadline.clone();
+
+        trans_threads.push(std::thread::spawn(move || {
+            sleep_until(deadline);
+
+            for _ in 0..nops {
+                while fifo.transform(|input| input + 1).is_err() {
+                    // println!("transform failed");
+                    std::hint::spin_loop();
+                }
+            }
+        }))
+    }
+
+    println!("Created trans threads ({:?})", epoch.elapsed());
+
+    let consuming_thread = {
+        let fifo = consumer;
+        let deadline = deadline.clone();
+
+        std::thread::spawn(move || {
+            sleep_until(deadline);
+
+            for _ in 0..nops {
+                while fifo.transform(|_| ()).is_err() {
+                    // println!("consume failed");
+                    std::hint::spin_loop();
+                }
+            }
+        })
+    };
+
+    println!("Created cons thread ({:?})", epoch.elapsed());
+
+    sleep_until(deadline);
+
+    println!("Woken from sleep until ({:?})", epoch.elapsed());
 
     producing_thread.join().unwrap();
-    transforming_thread.join().unwrap();
+    trans_threads.into_iter().for_each(|t| t.join().unwrap());
     consuming_thread.join().unwrap();
+
+    println!("Threads joined ({:?})", epoch.elapsed());
+
+    println!(
+        "Estimated rate ({:.2e} ops/s)",
+        nops as f64 / deadline.elapsed().as_secs_f64()
+    )
 }

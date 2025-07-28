@@ -8,7 +8,6 @@ use std::{
 };
 
 #[derive(Parser, Debug)]
-#[command(author, version, about)]
 struct Cli {
     #[arg(short = 'p', long = "nprod")]
     nprod: usize,
@@ -75,10 +74,10 @@ fn main() {
     for _ in 0..ncons {
         let fifo = fifo.clone();
         let deadline = deadline.clone();
-        
+
         cons_threads.push(thread::spawn(move || {
             sleep_until(deadline);
-    
+
             for _ in 0..nops {
                 while fifo.pop().is_err() {
                     std::hint::spin_loop();
@@ -103,7 +102,6 @@ fn main() {
 
     println!(
         "Estimated rate ({:.2e} ops/s)",
-        nops as f64 * (ncons as f64 + nprod as f64)
-            / deadline.elapsed().as_secs_f64()
+        nops as f64 * (ncons as f64 + nprod as f64) / deadline.elapsed().as_secs_f64()
     );
 }
