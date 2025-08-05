@@ -1,3 +1,5 @@
+#![feature(allocator_api)]
+
 extern crate self as fastfifo;
 
 pub use crate::error::Error;

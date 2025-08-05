@@ -1,95 +1,95 @@
-use crate::{
-    field::Field,
-    transform::{config::FifoTag, wide_field::WideField},
-};
+use crate::transform::{config::FifoTag, field::Field, wide_field::WideField};
 use std::{
     cell::UnsafeCell,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-pub trait Atomic<const NUM_BLOCKS: usize, Tag: FifoTag> {
-    fn load(&self) -> WideField<NUM_BLOCKS, Tag>;
-    fn max(&self, rhs: Field<NUM_BLOCKS>) -> WideField<NUM_BLOCKS, Tag>;
+pub trait Atomic<Tag: FifoTag> {
+    fn load(&self) -> WideField<Tag>;
+    fn max(&self, rhs: Field) -> WideField<Tag>;
 }
 
 /// For SP or SC
-#[repr(C)]
-pub struct NonAtomicHead<const NUM_BLOCKS: usize, Tag: FifoTag> {
-    inner: UnsafeCell<Field<NUM_BLOCKS>>,
-    tag: Tag,
-}
+pub struct NonAtomicHead<Tag: FifoTag>(UnsafeCell<WideField<Tag>>);
 
-impl<const NUM_BLOCKS: usize, Tag: FifoTag> NonAtomicHead<NUM_BLOCKS, Tag> {
-    pub const fn new(tag: Tag) -> Self {
-        Self {
-            inner: UnsafeCell::new(Field::new()),
+impl<Tag: FifoTag> NonAtomicHead<Tag> {
+    pub fn from_parts(index_max: usize, version: usize, index: usize, tag: Tag) -> Self {
+        Self(UnsafeCell::new(WideField::from_parts(
+            Field::from_parts(index_max, version, index),
             tag,
-        }
-    }
-
-    pub const fn full_minus_one(tag: Tag) -> Self {
-        Self {
-            inner: UnsafeCell::new(Field::full_minus_one()),
-            tag,
-        }
+        )))
     }
 }
 
-impl<const NUM_BLOCKS: usize, Tag: FifoTag> Atomic<NUM_BLOCKS, Tag>
-    for NonAtomicHead<NUM_BLOCKS, Tag>
-{
-    fn load(&self) -> WideField<NUM_BLOCKS, Tag> {
-        WideField::from_parts(unsafe { self.inner.get().read() }, self.tag.clone())
+impl<Tag: FifoTag> From<WideField<Tag>> for NonAtomicHead<Tag> {
+    fn from(value: WideField<Tag>) -> Self {
+        Self(UnsafeCell::new(value))
+    }
+}
+
+impl<Tag: FifoTag> Atomic<Tag> for NonAtomicHead<Tag> {
+    fn load(&self) -> WideField<Tag> {
+        unsafe { self.0.get().read() }
     }
 
-    fn max(&self, rhs: Field<NUM_BLOCKS>) -> WideField<NUM_BLOCKS, Tag> {
+    fn max(&self, rhs: Field) -> WideField<Tag> {
         let old = self.load();
         if rhs > *old {
             // Safety: This layer was chosen to be non-atomic.
             unsafe {
-                self.inner.get().write(rhs);
+                self.0
+                    .get()
+                    .write(WideField::from_parts(rhs, old.get_tag()));
             }
+            old
+        } else {
+            WideField::from_parts(rhs, old.get_tag())
         }
-        old
     }
 }
 
 /// For MP or MC
 #[repr(C)]
-pub struct AtomicHead<const NUM_BLOCKS: usize, Tag: FifoTag> {
+pub struct AtomicHead<Tag: FifoTag> {
+    index_max: usize,
     inner: AtomicUsize,
     tag: Tag,
 }
 
-impl<const NUM_BLOCKS: usize, Tag: FifoTag> AtomicHead<NUM_BLOCKS, Tag> {
-    pub fn new(tag: Tag) -> Self {
+impl<Tag: FifoTag> AtomicHead<Tag> {
+    pub fn from_parts(index_max: usize, version: usize, index: usize, tag: Tag) -> Self {
         Self {
-            inner: AtomicUsize::new(Field::<NUM_BLOCKS>::new().into()),
-            tag,
-        }
-    }
-
-    pub fn full_minus_one(tag: Tag) -> Self {
-        Self {
-            inner: AtomicUsize::new(Field::<NUM_BLOCKS>::full_minus_one().into()),
+            index_max,
+            inner: AtomicUsize::new(Field::from_parts(index_max, version, index).get_raw_inner()),
             tag,
         }
     }
 }
 
-impl<const NUM_BLOCKS: usize, Tag: FifoTag> Atomic<NUM_BLOCKS, Tag>
-    for AtomicHead<NUM_BLOCKS, Tag>
-{
-    fn load(&self) -> WideField<NUM_BLOCKS, Tag> {
+impl<Tag: FifoTag> From<WideField<Tag>> for AtomicHead<Tag> {
+    fn from(value: WideField<Tag>) -> Self {
+        Self {
+            index_max: value.get_index_max(),
+            inner: AtomicUsize::new(value.get_raw_inner()),
+            tag: value.get_tag(),
+        }
+    }
+}
+
+impl<Tag: FifoTag> Atomic<Tag> for AtomicHead<Tag> {
+    fn load(&self) -> WideField<Tag> {
         WideField::from_parts(
-            Field::from(self.inner.load(Ordering::Relaxed)),
+            Field::from_raw_parts(self.index_max, self.inner.load(Ordering::Relaxed)),
             self.tag.clone(),
         )
     }
 
-    fn max(&self, rhs: Field<NUM_BLOCKS>) -> WideField<NUM_BLOCKS, Tag> {
+    fn max(&self, rhs: Field) -> WideField<Tag> {
         WideField::from_parts(
-            Field::from(self.inner.fetch_max(rhs.into(), Ordering::Relaxed)),
+            Field::from_raw_parts(
+                self.index_max,
+                self.inner.fetch_max(rhs.get_raw_inner(), Ordering::Relaxed),
+            ),
             self.tag.clone(),
         )
     }

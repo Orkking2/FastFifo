@@ -5,7 +5,7 @@ use itertools::izip;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Error, Expr, GenericParam, Generics, Ident, Token, Type, TypeParamBound, Visibility, braced,
+    Error, Expr, Generics, Ident, Token, Type, Visibility, braced,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     spanned::Spanned,
@@ -29,13 +29,6 @@ fn test() {
     )
     .unwrap();
 }
-
-/*
-pub Name<generics> {
-    VarientName: type, atomic = true;
-    VarientName: type, atomic = false;
-}
-*/
 
 struct UnionTypeInput {
     vis: Visibility,
@@ -212,23 +205,6 @@ fn get_chases<T: Clone>(chases: &Vec<usize>, original: &Vec<T>) -> Vec<T> {
         .collect::<Vec<_>>()
 }
 
-fn add_static_bound(mut generics: Generics) -> Generics {
-    for param in &mut generics.params {
-        if let GenericParam::Type(type_param) = param {
-            let has_static = type_param.bounds.iter().any(|b| {
-                matches!(
-                    b,
-                    TypeParamBound::Lifetime(lt) if lt.ident == "static"
-                )
-            });
-            if !has_static {
-                type_param.bounds.push(parse_quote!('static));
-            }
-        }
-    }
-    generics
-}
-
 fn is_unit(ty: &Type) -> bool {
     match ty {
         Type::Tuple(tuple) => tuple.elems.is_empty(),
@@ -246,11 +222,18 @@ pub(crate) fn do_generate_union(
 ) -> proc_macro2::TokenStream {
     let num_variants = variants.len();
 
+    if num_variants < 2 {
+        return quote! { compile_error!("Must have at least two layers!") };
+    }
+
     let fifo_transform_path = quote! { ::fastfifo::transform };
     let fifo_config_path = quote! { #fifo_transform_path ::config };
     let entry_descriptor = quote! { #fifo_transform_path ::entry_descriptor::EntryDescriptor };
     let manually_drop = quote! { ::core::mem::ManuallyDrop };
     let result = quote! { #fifo_transform_path ::Result };
+    let std_alloc = quote! { ::std::alloc };
+
+    let (impl_generic, ty_generic, where_clause) = generics.split_for_impl();
 
     let variants = uv_to_fuv(variants);
 
@@ -268,18 +251,11 @@ pub(crate) fn do_generate_union(
 
     let (variant_names, field_names, atomicities, types, chases) = unroll_variants(variants);
 
+    let producer_variant = variant_names.first().unwrap();
+
     let chases_variant_names = get_chases(&chases, &variant_names);
     let chases_field_names = get_chases(&chases, &field_names);
     let chases_types = get_chases(&chases, &types);
-    // .into_iter()
-    // .map(|ty| {
-    //     if is_unit(&ty) {
-    //         quote! {}
-    //     } else {
-    //         quote! { #ty }
-    //     }
-    // })
-    // .collect::<Vec<_>>();
 
     let tag_name = format_ident!("{}Tag", name);
     let fifo_name = format_ident!("{}Fifo", name);
@@ -296,80 +272,63 @@ pub(crate) fn do_generate_union(
         })
         .collect::<(Vec<_>, Vec<_>)>();
 
-    let mut expanded_generics = generics.clone();
+    let mut alloc_generics = generics.clone();
 
-    let (impl_generic, ty_generic, where_clause) = generics.split_for_impl();
-
-    expanded_generics
+    alloc_generics
         .params
-        .push(parse_quote!(const NUM_BLOCKS: usize));
-    expanded_generics
+        .push(parse_quote! { A: #std_alloc ::Allocator });
+
+    let (alloc_impl_generic, alloc_ty_generic, _) = alloc_generics.split_for_impl();
+
+    let mut default_alloc_generics = generics.clone();
+
+    default_alloc_generics
         .params
-        .push(parse_quote!(const BLOCK_SIZE: usize));
-    // expanded_generics
-    //     .params
-    //     .push(parse_quote!(const NUM_TRANSFORMATIONS: usize));
+        .push(parse_quote! { A: #std_alloc ::Allocator = #std_alloc ::Global });
 
-    let expanded_where_clause = expanded_generics.make_where_clause();
-
-    expanded_where_clause
-        .predicates
-        .push(parse_quote!([(); NUM_BLOCKS]:));
-    expanded_where_clause
-        .predicates
-        .push(parse_quote!([(); BLOCK_SIZE]:));
-    // expanded_where_clause
-    //     .predicates
-    //     .push(parse_quote!([(); NUM_TRANSFORMATIONS]:));
-
-    let mut lifetime_generics = expanded_generics.clone();
-
-    let static_expanded_generics = add_static_bound(expanded_generics.clone());
-
-    let (static_expanded_impl_generic, _, _) = static_expanded_generics.split_for_impl();
-
-    let (expanded_impl_generic, expanded_ty_generic, expanded_where_clause) =
-        expanded_generics.split_for_impl();
+    let mut lifetime_generics = alloc_generics.clone();
 
     lifetime_generics
         .params
         .insert(0, parse_quote!('entry_descriptor_lifetime));
 
-    let (lifetime_impl_generic, lifetime_ty_generic, _lifetime_where_clause) =
-        lifetime_generics.split_for_impl();
+    let (lifetime_impl_generic, lifetime_ty_generic, _) = lifetime_generics.split_for_impl();
 
-    let transform_f_trait = izip!(&chases_types, &types).map(|(chases_type, ty)| {
-        if is_unit(ty) && is_unit(chases_type) {
-            quote! {::std::ops::FnOnce()}
-        } else if is_unit(ty) {
-            quote! {::std::ops::FnOnce(#chases_type)}
-        } else if is_unit(chases_type) {
-            quote! {::std::ops::FnOnce() -> #ty}
-        } else {
-            quote! {::std::ops::FnOnce(#chases_type) -> #ty}
-        }
-    });
+    let transform_f_trait = izip!(&chases_types, &types)
+        .map(|(chases_type, ty)| {
+            if is_unit(ty) && is_unit(chases_type) {
+                quote! {::std::ops::FnOnce()}
+            } else if is_unit(ty) {
+                quote! {::std::ops::FnOnce(#chases_type)}
+            } else if is_unit(chases_type) {
+                quote! {::std::ops::FnOnce() -> #ty}
+            } else {
+                quote! {::std::ops::FnOnce(#chases_type) -> #ty}
+            }
+        })
+        .collect::<Vec<_>>();
 
     let variant_impls = izip!(
         &variant_entries,
         &chases_types,
         &types,
         &field_names,
-        &chases_field_names
+        &chases_field_names,
+        &transform_f_trait
     )
-    .map(|(variant_entry, chases_type, ty, field_name, chases_field_name)| {
+    .map(|(variant_entry, chases_type, ty, field_name, chases_field_name, transform_trait)| {
         if is_unit(ty) && is_unit(chases_type) {
             quote! {
-                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #where_clause {
                     #[allow(dead_code)]
-                    pub fn transform<F: ::std::ops::FnOnce()>(&mut self, transformer: F) { transformer() }
+                    pub fn transform<F: #transform_trait>(&mut self, transformer: F) { transformer() }
                 }
             }
         } else if is_unit(ty) {
             quote! {
-                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #where_clause {
                     #[allow(dead_code)]
-                    pub fn transform<F: ::std::ops::FnOnce(#chases_type)>(&mut self, transformer: F) {
+                    pub fn transform<F: #transform_trait>(&mut self, transformer: F) {
                         self.0.modify_t_in_place(|ptr| unsafe {
                             transformer(<#manually_drop ::<#chases_type>>::into_inner (ptr.read().#chases_field_name))
                         })
@@ -378,9 +337,9 @@ pub(crate) fn do_generate_union(
             }
         } else if is_unit(chases_type) {
             quote! {
-                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #where_clause {
                     #[allow(dead_code)]
-                    pub fn transform<F: ::std::ops::FnOnce() -> #ty>(&mut self, transformer: F) {
+                    pub fn transform<F: #transform_trait>(&mut self, transformer: F) {
                         self.0.modify_t_in_place(|ptr| unsafe { ptr.write(
                             #name {
                                 #field_name : #manually_drop ::new(transformer())
@@ -391,9 +350,9 @@ pub(crate) fn do_generate_union(
             }
         } else {
             quote! {
-                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #expanded_where_clause {
+                impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #where_clause {
                     #[allow(dead_code)]
-                    pub fn transform<F: ::std::ops::FnOnce(#chases_type) -> #ty>(&mut self, transformer: F) {
+                    pub fn transform<F: #transform_trait>(&mut self, transformer: F) {
                         self.0.modify_t_in_place(|ptr| unsafe { ptr.write(
                             #name {
                                 #field_name : #manually_drop ::new(
@@ -406,8 +365,6 @@ pub(crate) fn do_generate_union(
             }
         }
     }).collect::<Vec<_>>();
-
-    
 
     quote! {
         #vis union #name #impl_generic #where_clause {
@@ -470,6 +427,14 @@ pub(crate) fn do_generate_union(
                     #( Self::#variant_names => Self::#chases_variant_names ,)*
                 }
             }
+
+            fn producer() -> Self {
+                Self::#producer_variant
+            }
+
+            fn num_transformations() -> usize {
+                #num_variants
+            }
         }
 
         impl #impl_generic #fifo_config_path ::IndexedDrop<#tag_name> for #name #ty_generic #where_clause {
@@ -480,31 +445,38 @@ pub(crate) fn do_generate_union(
             }
         }
 
-        #vis struct #fifo_name #expanded_impl_generic (
-            #fifo_transform_path ::FastFifo<#tag_name, #name #ty_generic, NUM_BLOCKS, BLOCK_SIZE, #num_variants>,
-        ) #expanded_where_clause;
+        #vis struct #fifo_name #default_alloc_generics (
+            #fifo_transform_path ::FastFifo<#tag_name, #name #ty_generic, A>,
+        ) #where_clause;
 
-        impl #expanded_impl_generic #fifo_config_path ::TaggedClone<#tag_name> for #fifo_name #expanded_ty_generic #expanded_where_clause
+        impl #alloc_impl_generic #fifo_config_path ::TaggedClone<#tag_name> for #fifo_name #alloc_ty_generic #where_clause
         {
             fn unchecked_clone(&self) -> Self {
                 Self(self.0.unchecked_clone())
             }
         }
 
-        impl #static_expanded_impl_generic #fifo_name #expanded_ty_generic #expanded_where_clause {
+        impl #impl_generic #fifo_name #ty_generic #where_clause {
             #[allow(dead_code)]
-            pub fn new() -> Self {
-                Self(#fifo_transform_path ::FastFifo::new())
+            pub fn new(num_blocks: usize, block_size: usize) -> Self {
+                Self(#fifo_transform_path ::FastFifo::new(num_blocks, block_size))
+            }
+        }
+
+        impl #alloc_impl_generic #fifo_name #alloc_ty_generic #where_clause {
+            #[allow(dead_code)]
+            pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
+                Self(#fifo_transform_path ::FastFifo::new_in(num_blocks, block_size, alloc))
             }
 
             #[allow(dead_code)]
-            pub fn get_entry(&self, tag: #tag_name) -> #result <#entry_descriptor <'_, #tag_name, #name #ty_generic, BLOCK_SIZE, #num_variants>> {
+            pub fn get_entry(&self, tag: #tag_name) -> #result <#entry_descriptor <'_, #tag_name, #name #ty_generic, A>> {
                 self.0.get_entry(tag)
             }
 
             #[allow(dead_code)]
             pub fn split(self) -> (
-                #( #variant_fifos #expanded_ty_generic ,)*
+                #( #variant_fifos #alloc_ty_generic ,)*
             ) {
                 (
                     #( #variant_fifos ( <Self as #fifo_config_path ::TaggedClone<#tag_name>>::unchecked_clone(&self)) ,)*
@@ -514,45 +486,45 @@ pub(crate) fn do_generate_union(
 
         #(
             #vis struct #variant_entries #lifetime_impl_generic (
-                #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, BLOCK_SIZE, #num_variants>
-            ) #expanded_where_clause;
+                #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>
+            ) #where_clause;
 
-            impl #lifetime_impl_generic From<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, BLOCK_SIZE, #num_variants>>
-                for #variant_entries #lifetime_ty_generic #expanded_where_clause
+            impl #lifetime_impl_generic From<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>>
+                for #variant_entries #lifetime_ty_generic #where_clause
             {
-                fn from(value: #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, BLOCK_SIZE, #num_variants>) -> Self {
+                fn from(value: #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>) -> Self {
                     Self(value)
                 }
             }
 
-            impl #lifetime_impl_generic Into<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, BLOCK_SIZE, #num_variants>>
-                for #variant_entries #lifetime_ty_generic #expanded_where_clause
+            impl #lifetime_impl_generic Into<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>>
+                for #variant_entries #lifetime_ty_generic #where_clause
             {
-                fn into(self) -> #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, BLOCK_SIZE, #num_variants> {
+                fn into(self) -> #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A> {
                     self.0
                 }
             }
 
             #variant_impls
 
-            #vis struct #variant_fifos #expanded_impl_generic (
-                #fifo_name #expanded_ty_generic
-            ) #expanded_where_clause;
+            #vis struct #variant_fifos #alloc_impl_generic (
+                #fifo_name #alloc_ty_generic
+            ) #where_clause;
 
-            impl #expanded_impl_generic #fifo_config_path ::TaggedClone<#tag_name> for #variant_fifos #expanded_ty_generic #expanded_where_clause {
+            impl #alloc_impl_generic #fifo_config_path ::TaggedClone<#tag_name> for #variant_fifos #alloc_ty_generic #where_clause {
                 fn unchecked_clone(&self) -> Self {
                     Self(self.0.unchecked_clone())
                 }
             }
 
-            impl #expanded_impl_generic Clone for #variant_fifos #expanded_ty_generic #expanded_where_clause {
+            impl #alloc_impl_generic Clone for #variant_fifos #alloc_ty_generic #where_clause {
                 fn clone(&self) -> Self {
                     <Self as #fifo_config_path ::TaggedClone<#tag_name>>::tagged_clone(&self, #tag_name :: #variant_names)
                         .expect("this variant was marked with `atomic = false` and cannot be cloned")
                 }
             }
 
-            impl #static_expanded_impl_generic #variant_fifos #expanded_ty_generic #expanded_where_clause {
+            impl #alloc_impl_generic #variant_fifos #alloc_ty_generic #where_clause {
                 #[allow(dead_code)]
                 pub fn get_entry<'entry_descriptor_lifetime>(&'entry_descriptor_lifetime self) -> #result <#variant_entries #lifetime_ty_generic> {
                     self.0.get_entry(#tag_name :: #variant_names).map(#variant_entries ::from)

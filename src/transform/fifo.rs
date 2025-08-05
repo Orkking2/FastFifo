@@ -1,80 +1,29 @@
-use crate::{
-    field::{Field, FieldConfig},
-    transform::{
-        Result,
-        block::{Block, ReserveState},
-        config::{FifoTag, IndexedDrop},
-        entry_descriptor::EntryDescriptor,
-        error::Error,
-        head::{Atomic, AtomicHead, NonAtomicHead},
-        wide_field::WideField,
-    },
+use crate::transform::{
+    Result,
+    block::{Block, ReserveState},
+    config::{FifoTag, IndexedDrop},
+    entry_descriptor::EntryDescriptor,
+    error::Error,
+    field::Field,
+    field::FieldConfig,
+    head::{Atomic, AtomicHead, NonAtomicHead},
+    wide_field::WideField,
 };
-use std::{array, ops::Deref};
+use std::{alloc::Allocator, ptr::NonNull, rc::Rc};
 
-// type Tag: FifoTag;
-// type Inner: IndexedDrop + Default;
-// const NUM_TRANSFORMATIONS: usize;
-// const NUM_BLOCKS: usize;
-// const BLOCK_SIZE: usize;
-
-pub(crate) struct FastFifoInner<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const NUM_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> where
-    [(); NUM_BLOCKS]:,
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
-    heads: [Box<dyn Atomic<NUM_BLOCKS, Tag>>; NUM_TRANSFORMATIONS],
-    blocks: [Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>; NUM_BLOCKS],
+pub(crate) struct FastFifoInner<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
+    heads: NonNull<[NonNull<dyn Atomic<Tag>>]>,
+    num_blocks: usize,
+    blocks: NonNull<[Block<Tag, Inner, A>]>,
 }
 
-unsafe impl<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const NUM_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Send for FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); NUM_BLOCKS]:,
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
+unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Send
+    for FastFifoInner<Tag, Inner, A>
 {
 }
-unsafe impl<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const NUM_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Sync for FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); NUM_BLOCKS]:,
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
+unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Sync
+    for FastFifoInner<Tag, Inner, A>
 {
-}
-
-impl<
-    Tag: FifoTag + 'static,
-    Inner: IndexedDrop<Tag> + Default,
-    const NUM_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Default for FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); NUM_BLOCKS]:,
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 enum AdvanceHeadStatus {
@@ -82,65 +31,86 @@ enum AdvanceHeadStatus {
     Success,
 }
 
-impl<
-    Tag: FifoTag + 'static,
-    Inner: IndexedDrop<Tag> + Default,
-    const NUM_BLOCKS: usize,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); NUM_BLOCKS]:,
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
+impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
+    FastFifoInner<Tag, Inner, A>
 {
-    pub fn new() -> Self {
-        Self {
-            heads: array::from_fn(|i| {
-                let tag = Tag::try_from(i).unwrap();
+    pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
+        let rc_alloc = Rc::new(alloc);
 
-                if tag.is_consumer(NUM_TRANSFORMATIONS - 1) {
-                    if tag.is_atomic() {
-                        Box::new(AtomicHead::full_minus_one(tag))
-                            as Box<dyn Atomic<NUM_BLOCKS, Tag>>
-                    } else {
-                        Box::new(NonAtomicHead::full_minus_one(tag))
-                    }
-                } else {
-                    if tag.is_atomic() {
-                        Box::new(AtomicHead::new(tag)) as Box<dyn Atomic<NUM_BLOCKS, Tag>>
-                    } else {
-                        Box::new(NonAtomicHead::new(tag))
-                    }
-                }
-            }),
-            blocks: array::from_fn(|_| Block::full_consumer()),
+        Self {
+            heads: unsafe {
+                NonNull::new_unchecked(Box::into_raw({
+                    let mut vec = Vec::new_in(rc_alloc.as_ref());
+                    vec.reserve(Tag::num_transformations());
+
+                    vec.extend((0..Tag::num_transformations()).map(|i| {
+                        let tag = Tag::try_from(i).unwrap();
+
+                        let field = WideField::from_parts(
+                            Field::from_parts(
+                                num_blocks,
+                                0,
+                                if tag.into() == Tag::producer().chases().into() {
+                                    num_blocks - 1
+                                } else {
+                                    0
+                                },
+                            ),
+                            tag,
+                        );
+
+                        // Safety: Same as above.
+                        NonNull::new_unchecked(Box::into_raw(if tag.is_atomic() {
+                            Box::new_in(AtomicHead::from(field), rc_alloc.as_ref())
+                                as Box<dyn Atomic<Tag>, _>
+                        } else {
+                            Box::new_in(NonAtomicHead::from(field), rc_alloc.as_ref())
+                        }))
+                    }));
+
+                    vec.into_boxed_slice()
+                }))
+            },
+            blocks: unsafe {
+                NonNull::new_unchecked(Box::into_raw({
+                    let mut vec = Vec::new_in(rc_alloc.as_ref());
+                    vec.reserve(num_blocks);
+
+                    vec.extend(
+                        (0..num_blocks).map(|_| Block::new(block_size, true, rc_alloc.clone())),
+                    );
+
+                    vec.into_boxed_slice()
+                }))
+            },
+            num_blocks,
         }
     }
+}
 
-    fn get_head(&self, tag: Tag) -> &dyn Atomic<NUM_BLOCKS, Tag> {
-        &*self.heads[tag.into()]
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator>
+    FastFifoInner<Tag, Inner, A>
+{
+    fn get_head(&self, tag: Tag) -> &dyn Atomic<Tag> {
+        // Safety: this pointer can be turned into a reference because I said so.
+        unsafe { self.heads.as_ref().get(tag.into()).unwrap().as_ref() }
     }
 
-    fn get_block(
-        &self,
-        tag: Tag,
-    ) -> (
-        WideField<NUM_BLOCKS, Tag>,
-        &Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>,
-    ) {
+    fn get_block(&self, tag: Tag) -> (WideField<Tag>, &Block<Tag, Inner, A>) {
         let head = self.get_head(tag).load();
 
-        (head.clone(), &self.blocks[head.get_index()])
+        unsafe { (head.clone(), &self.blocks.as_ref()[head.get_index()]) }
     }
 
-    fn advance_head(&self, head: WideField<NUM_BLOCKS, Tag>) -> AdvanceHeadStatus {
-        let (next_current, next_chasing) =
-            self.blocks[(head.get_index() + 1) % NUM_BLOCKS].get_current_chasing(head.get_tag());
+    fn advance_head(&self, head: WideField<Tag>) -> AdvanceHeadStatus {
+        let (next_current, next_chasing) = unsafe {
+            self.blocks.as_ref()[(head.get_index() + 1) % self.num_blocks]
+                .get_current_chasing(head.get_tag())
+        };
 
         let chasing_give = next_chasing.load_give();
 
-        if let AdvanceHeadStatus::Success = if chasing_give.get_index() >= NUM_BLOCKS {
+        if let AdvanceHeadStatus::Success = if chasing_give.get_index() >= self.num_blocks {
             // Guaranteed to be able to advance to next block, early escape
             AdvanceHeadStatus::Success
         } else {
@@ -162,8 +132,9 @@ where
             // Success, update atomics in nblk and cached head
 
             next_current.fetch_max_both(FieldConfig {
+                index_max: self.num_blocks,
                 version: head.get_version() + 1,
-                ..Default::default()
+                index: 0,
             });
 
             self.get_head(head.get_tag()).max(head.version_inc_add(1));
@@ -176,10 +147,7 @@ where
         }
     }
 
-    pub fn get_entry(
-        &self,
-        tag: Tag,
-    ) -> Result<EntryDescriptor<'_, Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>> {
+    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner, A>> {
         //         v [2].give (1)
         //         |         v [2].take (2)
         //         |         |           v [1].give (3)
@@ -212,7 +180,7 @@ where
 //     const NUM_BLOCKS: usize,
 //     const BLOCK_SIZE: usize,
 //     const NUM_TRANSFORMATIONS: usize,
-// > Drop for FastFifoInner<Tag, Inner, NUM_BLOCKS, BLOCK_SIZE, NUM_TRANSFORMATIONS>
+// > Drop for FastFifoInner<Tag, Inner>
 // where
 //     [(); NUM_BLOCKS]:,
 //     [(); BLOCK_SIZE]:,

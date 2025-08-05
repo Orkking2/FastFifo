@@ -1,28 +1,28 @@
-use crate::{field::Field, transform::config::FifoTag};
+use crate::transform::{config::FifoTag, field::Field};
 use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Copy, Debug)]
-pub struct WideField<const INDEX_MAX: usize, Tag: FifoTag> {
-    inner: Field<INDEX_MAX>,
+pub struct WideField<Tag: FifoTag> {
+    inner: Field,
     tag: Tag,
 }
 
-impl<const INDEX_MAX: usize, Tag: FifoTag> Deref for WideField<INDEX_MAX, Tag> {
-    type Target = Field<INDEX_MAX>;
+impl<Tag: FifoTag> Deref for WideField<Tag> {
+    type Target = Field;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<const INDEX_MAX: usize, Tag: FifoTag> DerefMut for WideField<INDEX_MAX, Tag> {
+impl<Tag: FifoTag> DerefMut for WideField<Tag> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<const INDEX_MAX: usize, Tag: FifoTag> WideField<INDEX_MAX, Tag> {
-    pub const fn from_parts(field: Field<INDEX_MAX>, tag: Tag) -> Self {
+impl<Tag: FifoTag> WideField<Tag> {
+    pub const fn from_parts(field: Field, tag: Tag) -> Self {
         Self { inner: field, tag }
     }
 

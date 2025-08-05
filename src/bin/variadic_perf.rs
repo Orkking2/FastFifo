@@ -1,9 +1,10 @@
 #![feature(thread_sleep_until)]
+#![feature(allocator_api)]
 
 use clap::Parser;
 use fastfifo::generate_union;
 use std::{
-    thread::{sleep, sleep_until},
+    thread::sleep_until,
     time::{Duration, Instant},
 };
 
@@ -36,7 +37,7 @@ fn main() {
     let epoch = Instant::now();
     let deadline = epoch + Duration::from_millis(100);
 
-    let fifo = InOutUnionFifo::<usize, usize, 10, 10_000>::new();
+    let fifo = InOutUnionFifo::<usize, usize>::new(100, 10_000);
     let (producer, transformer, consumer) = fifo.split();
 
     let producing_thread = {

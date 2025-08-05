@@ -3,107 +3,83 @@ use crate::transform::{
     config::{FifoTag, IndexedDrop},
     entry_descriptor::EntryDescriptor,
 };
-use std::{array, marker::PhantomData};
+use std::{alloc::Allocator, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 #[repr(C)]
-pub struct Block<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> where
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
+pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
     _phantom: PhantomData<Tag>,
-    atomics: [AtomicPair<BLOCK_SIZE>; NUM_TRANSFORMATIONS],
-    entries: [Inner; BLOCK_SIZE],
+    atomics: NonNull<[AtomicPair]>,
+    entries: NonNull<[Inner]>,
+    block_size: usize,
+    rc_alloc: Rc<A>,
 }
 
-pub enum ReserveState<
-    'a,
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> where
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
-    Success(EntryDescriptor<'a, Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>),
+pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
+    Success(EntryDescriptor<'a, Tag, Inner, A>),
     NotAvailable,
     BlockDone,
     Busy,
 }
 
-impl<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Default for Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
-    pub fn new() -> Self {
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, Inner, A> {
+    pub fn new(block_size: usize, is_full_consumer: bool, rc_alloc: Rc<A>) -> Self {
         Self {
             _phantom: PhantomData,
-            atomics: array::from_fn(|_| AtomicPair::new()),
-            entries: array::from_fn(|_| Default::default()),
+            atomics: unsafe {
+                NonNull::new_unchecked(Box::into_raw({
+                    if is_full_consumer {
+                        let mut vec = Vec::new_in(rc_alloc.as_ref());
+                        vec.reserve(block_size);
+
+                        vec.extend((0..Tag::num_transformations()).map(|i| {
+                            let tag = Tag::try_from(i).unwrap();
+
+                            if tag.into() == Tag::producer().chases().into() {
+                                AtomicPair::new(block_size, block_size)
+                            } else {
+                                AtomicPair::new(block_size, 0)
+                            }
+                        }));
+
+                        vec.into_boxed_slice()
+                    } else {
+                        let mut vec = Vec::new_in(rc_alloc.as_ref());
+                        vec.resize_with(Tag::num_transformations(), || {
+                            AtomicPair::new(block_size, 0)
+                        });
+
+                        vec.into_boxed_slice()
+                    }
+                }))
+            },
+            entries: unsafe {
+                NonNull::new_unchecked(Box::into_raw({
+                    let mut vec = Vec::new_in(rc_alloc.as_ref());
+                    vec.resize_with(block_size, Inner::default);
+
+                    vec.into_boxed_slice()
+                }))
+            },
+            block_size,
+            rc_alloc,
         }
     }
 
-    pub fn full_consumer() -> Self {
-        Self {
-            _phantom: PhantomData,
-            atomics: array::from_fn(|i| {
-                if i + 1 == NUM_TRANSFORMATIONS {
-                    AtomicPair::full()
-                } else {
-                    AtomicPair::new()
-                }
-            }),
-            entries: array::from_fn(|_| Default::default()),
-        }
+    pub fn get_atomics(&self, tag: Tag) -> &AtomicPair {
+        unsafe { &self.atomics.as_ref()[tag.into()] }
     }
 
-    pub fn get_atomics(&self, tag: Tag) -> &AtomicPair<BLOCK_SIZE> {
-        &self.atomics[tag.into()]
-    }
-
-    pub fn get_current_chasing(
-        &self,
-        tag: Tag,
-    ) -> (&AtomicPair<BLOCK_SIZE>, &AtomicPair<BLOCK_SIZE>) {
+    pub fn get_current_chasing(&self, tag: Tag) -> (&AtomicPair, &AtomicPair) {
         (self.get_atomics(tag), self.get_atomics(tag.chases()))
     }
 
-    pub fn reserve_in_layer(
-        &self,
-        tag: Tag,
-    ) -> ReserveState<'_, Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS> {
+    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, A> {
         let (current, chasing) = self.get_current_chasing(tag);
 
         loop {
             let current_take = current.load_take();
 
-            if current_take.get_index() >= BLOCK_SIZE {
+            if current_take.get_index() >= self.block_size {
                 break ReserveState::BlockDone;
             } else {
                 let chasing_give = chasing.load_give();
@@ -134,31 +110,25 @@ where
     /// # Safety
     /// This must be the only concurrent access of self.entries[index]
     pub unsafe fn get_ptr(&self, index: usize) -> *mut Inner {
-        &self.entries[index] as *const Inner as *mut Inner
+        unsafe { &self.entries.as_ref()[index] as *const Inner as *mut Inner }
     }
 }
 
-impl<
-    Tag: FifoTag,
-    Inner: IndexedDrop<Tag> + Default,
-    const BLOCK_SIZE: usize,
-    const NUM_TRANSFORMATIONS: usize,
-> Drop for Block<Tag, Inner, BLOCK_SIZE, NUM_TRANSFORMATIONS>
-where
-    [(); BLOCK_SIZE]:,
-    [(); NUM_TRANSFORMATIONS]:,
-{
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop for Block<Tag, Inner, A> {
     fn drop(&mut self) {
-        let x: [usize; NUM_TRANSFORMATIONS] = array::from_fn(|i| {
-            let ref atomic_pair = self.atomics[i];
-            let (give, take) = (atomic_pair.load_give(), atomic_pair.load_take());
+        let x = (0..Tag::num_transformations())
+            .map(|i| {
+                let atomic_pair = unsafe { &self.atomics.as_ref()[i] };
+                let (give, take) = (atomic_pair.load_give(), atomic_pair.load_take());
 
-            if give.get_index() < take.get_index() {
-                panic!("attempted to drop block while there exist incomplete transformations")
-            } else {
-                give.get_index()
-            }
-        });
+                if give.get_index() < take.get_index() {
+                    panic!("attempted to drop block while there exist incomplete transformations")
+                } else {
+                    give.get_index()
+                }
+            })
+            .collect::<Vec<_>>();
+        // ;
 
         //         v [2].give (1)
         //         |         v [2].take (2)
@@ -177,17 +147,23 @@ where
 
             if current < chasing {
                 for k in current..chasing {
-                    unsafe { self.entries[k].indexed_drop(i) }
+                    unsafe { self.entries.as_mut()[k].indexed_drop(i) }
                 }
             }
         }
 
         // Drop the set of entries outside of [x.first.index..x.last.index] with an index set intentionally to x.len()
-        // which is usually out of range, inducing a forget rather than a drop for what is usually uninitialized data
+        // which is usually out of range, inducing a forget rather than a drop for what is usually uninitialized data.
         //
         // Simply implementing a valid TryFrom<usize> for your UnionTag will change this behaviour to whatever you want!
         for k in (0..x[0]).chain(x[x.len() - 1]..self.entries.len()) {
-            unsafe { self.entries[k].indexed_drop(x.len()) }
+            unsafe { self.entries.as_mut()[k].indexed_drop(x.len()) }
+        }
+
+        // Now we free the memory used by this block.
+        unsafe { 
+            Box::from_raw_in(self.atomics.as_ptr(), self.rc_alloc.as_ref());
+            Box::from_raw_in(self.entries.as_ptr(), self.rc_alloc.as_ref());
         }
     }
 }
