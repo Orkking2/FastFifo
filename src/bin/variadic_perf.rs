@@ -155,7 +155,6 @@ fn main() {
             info!("Woken");
 
             for i in 0..nops {
-
                 while fifo
                     .transform(|output| {
                         #[cfg(feature = "debug")]
@@ -191,5 +190,8 @@ fn main() {
 
     info!("Threads joined");
 
-    info!("Estimated rate ({:.2e} ops/s)", nops as f64 / deadline.elapsed().as_secs_f64())
+    info!(
+        "Estimated rate ({:.2e} ops/s)",
+        nops as f64 / deadline.elapsed().as_secs_f64()
+    )
 }
