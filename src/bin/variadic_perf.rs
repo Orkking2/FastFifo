@@ -34,13 +34,15 @@ generate_union! {
     }
 }
 
-// To see the timings of the fastfifo library, use feature "debug", e.g.
+// To see the timings of the fastfifo library, use feature "debug"
 // RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -o 100
 // to see these timings along with those in main
 // RUST_LOG=info cargo run --release --bin varaidic_perf -F cli,debug -- -o 100
 
 // To see the timings of main
-// RUST_LOG=variadic_perf[main]=info cargo run --release --bin variadic_perf -F cli -- -o 100
+// RUST_LOG=variadic_perf=info cargo run --release --bin variadic_perf -F cli -- -o 100
+// To see thread timings (slows library)
+// RUST_LOG=variadic_perf=info cargo run --release --bin variadic_perf -F cli,debug -- -o 100
 
 // To see no timing info at all (this is not recommended)
 // cargo run --release --bin variadic_perf -F cli -- -o 100
@@ -70,9 +72,6 @@ fn main() {
 
     let fifo = InOutUnionFifo::<usize, usize>::new(4, 10);
 
-    let main_span = span!(Level::INFO, "main");
-    let _main_guard = main_span.enter();
-
     let (producer, transformer, consumer) = fifo.split();
 
     let producing_thread = {
@@ -85,13 +84,13 @@ fn main() {
 
             sleep_until(deadline);
 
-            info!(parent: &span, "Woken");
+            info!("Woken");
 
             for i in 0..nops {
                 while fifo
                     .transform(|| {
                         #[cfg(feature = "debug")]
-                        info!(parent: &span, "Op {i}: Uninit -> {i}");
+                        info!("Op {i}: Uninit -> {i}");
                         i
                     })
                     .is_err()
@@ -101,11 +100,11 @@ fn main() {
                 }
             }
 
-            info!(parent: &span, "Done");
+            info!("Done");
         })
     };
 
-    info!(parent: &main_span, "Created prod thread ({:?})", epoch.elapsed());
+    info!("Created prod thread");
 
     let mut trans_threads = Vec::with_capacity(num_trans_threads);
     for _ in 0..num_trans_threads {
@@ -118,13 +117,13 @@ fn main() {
 
             sleep_until(deadline); // + Duration::from_millis(1000));
 
-            info!(parent: &span, "Woken");
+            info!("Woken");
 
             for i in 0..nops {
                 while fifo
                     .transform(|input| {
                         #[cfg(feature = "debug")]
-                        info!(parent: &span, "Op {i}: {input} -> {}", input + 1);
+                        info!("Op {i}: {input} -> {}", input + 1);
                         input + 1
                     })
                     .is_err()
@@ -134,11 +133,11 @@ fn main() {
                 }
             }
 
-            info!(parent: &span, "Done");
+            info!("Done");
         }))
     }
 
-    info!(parent: &main_span, "Created trans threads ({:?})", epoch.elapsed());
+    info!("Created transformer threads");
 
     let consuming_thread = {
         let fifo = consumer;
@@ -150,21 +149,19 @@ fn main() {
 
             sleep_until(deadline); // + Duration::from_millis(2000));
 
-            info!(parent: &span, "Woken");
+            info!("Woken");
 
             for i in 0..nops {
-                let inner_span = span!(parent: &span, Level::INFO, "inner");
-                let _inner_guard = inner_span.enter();
 
                 while fifo
                     .transform(|output| {
                         #[cfg(feature = "debug")]
-                        info!(parent: &inner_span, "Op {i}: {output} -> Uninit");
+                        info!("Op {i}: {output} -> Uninit");
                         #[cfg(feature = "debug")]
                         if output != i + 1 {
-                            error!(parent: &inner_span, "FAILED ASSERTION `output ({output}) == i + 1 ({})`", i + 1);
+                            error!("FAILED ASSERTION `output ({output}) == i + 1 ({})`", i + 1);
                         } else {
-                            info!(parent: &inner_span, "SUCCEEDED ASSERTION `output == i + 1` ({output})")
+                            info!("SUCCEEDED ASSERTION `output == i + 1` ({output})")
                         }
                         assert_eq!(output, i + 1)
                     })
@@ -175,21 +172,21 @@ fn main() {
                 }
             }
 
-            info!(parent: &span, "Done");
+            info!("Done");
         })
     };
 
-    info!(parent: &main_span, "Created cons thread ({:?})", epoch.elapsed());
+    info!("Created cons thread");
 
     sleep_until(deadline);
 
-    info!(parent: &main_span, "Woken from sleep ({:?})", epoch.elapsed());
+    info!("Woken from sleep");
 
     consuming_thread.join().unwrap();
     trans_threads.into_iter().for_each(|t| t.join().unwrap());
     producing_thread.join().unwrap();
 
-    info!(parent: &main_span, "Threads joined ({:?})", epoch.elapsed());
+    info!("Threads joined");
 
-    info!(parent: &main_span, "Estimated rate ({:.2e} ops/s)", nops as f64 / deadline.elapsed().as_secs_f64())
+    info!("Estimated rate ({:.2e} ops/s)", nops as f64 / deadline.elapsed().as_secs_f64())
 }
