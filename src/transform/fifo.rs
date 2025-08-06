@@ -1,3 +1,4 @@
+#[cfg(feature = "debug")]
 use tracing::{info, instrument, warn};
 
 use crate::transform::{
@@ -38,7 +39,7 @@ enum AdvanceHeadStatus {
 impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
     FastFifoInner<Tag, Inner, A>
 {
-    #[instrument(skip(alloc))]
+    #[cfg_attr(feature = "debug", instrument(skip(alloc)))]
     pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
         let rc_alloc = Rc::new(alloc);
 
@@ -53,6 +54,7 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
 
                         let field = Field::from_parts(num_blocks, 0, 0);
 
+                        #[cfg(feature = "debug")]
                         info!("Head[{i}] = {field:?}");
 
                         NonNull::new_unchecked(Box::into_raw(if tag.is_atomic() {
@@ -72,7 +74,10 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
                     vec.reserve(num_blocks);
 
                     vec.extend((0..num_blocks).map(|i| {
+                        #[cfg(feature = "debug")]
                         info!("Init block {i}");
+                        let _ = i;
+
                         Block::new_in(block_size, rc_alloc.clone())
                     }));
 
@@ -91,15 +96,16 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
         unsafe { self.heads.as_ref().get(tag.into()).unwrap().as_ref() }
     }
 
-    #[instrument(skip(self, tag))]
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
     fn get_block(&self, tag: Tag) -> (Field, &Block<Tag, Inner, A>) {
         let head = self.get_head(tag).load();
+        #[cfg(feature = "debug")]
         info!(?head);
 
         unsafe { (head.clone(), &self.blocks.as_ref()[head.get_index()]) }
     }
 
-    #[instrument(skip(self, tag))]
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
     fn advance_head(&self, head: Field, tag: Tag) -> AdvanceHeadStatus {
         let (next_current, next_chasing) = unsafe {
             self.blocks.as_ref()[(head.get_index() + 1) % self.num_blocks].get_current_chasing(tag)
@@ -107,9 +113,11 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
 
         let chasing_give = next_chasing.load_give();
 
+        #[cfg(feature = "debug")]
         info!(?chasing_give);
 
         if let AdvanceHeadStatus::Success = if chasing_give.get_index() >= self.num_blocks {
+            #[cfg(feature = "debug")]
             info!("Success (early)");
 
             // Guaranteed to be able to advance to next block, early escape
@@ -120,9 +128,11 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
             // is at least `give.index`, that is, chasing_give.index <= chasing_take.index is always true.
             let chasing_take = next_chasing.load_take();
 
+            #[cfg(feature = "debug")]
             info!(?chasing_take);
 
             if chasing_take.get_index() > chasing_give.get_index() {
+                #[cfg(feature = "debug")]
                 warn!("Busy");
 
                 // The pair we are chasing is currently writing
@@ -130,6 +140,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
                 // We must assume that every entry is garbage
                 AdvanceHeadStatus::Busy
             } else {
+                #[cfg(feature = "debug")]
                 info!("Success");
 
                 // MUST be chasing_take == chasing_give, the valid state to advance this head
@@ -143,16 +154,22 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
                 version: head.get_version() + 1,
                 index: 0,
             });
+            #[cfg(feature = "debug")]
             info!(?new_next_current);
 
             let (old_give, old_take) = next_current.fetch_max_both(new_next_current);
+            #[cfg(feature = "debug")]
             info!(?old_give, ?old_take);
+            let (_, _) = (old_give, old_take);
 
             let head_vsn_inc_add = head.version_inc_add(1);
+            #[cfg(feature = "debug")]
             info!(?head_vsn_inc_add);
 
             let old_head = self.get_head(tag).max(head_vsn_inc_add);
+            #[cfg(feature = "debug")]
             info!(?old_head);
+            let _ = old_head;
 
             // Forward success
             AdvanceHeadStatus::Success
@@ -162,7 +179,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
         }
     }
 
-    #[instrument(skip(self))]
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
     pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner, A>> {
         //         v [2].give (1)
         //         |         v [2].take (2)
@@ -177,6 +194,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
 
             match block.reserve_in_layer(tag) {
                 ReserveState::Success(entry_descriptor) => {
+                    #[cfg(feature = "debug")]
                     info!(
                         "Success, block[{}][{}]",
                         head.get_index(),

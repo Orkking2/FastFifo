@@ -8,13 +8,10 @@ use std::{
     thread::sleep_until,
     time::{Duration, Instant},
 };
-use tracing::{error, info, instrument, span, Level};
+use tracing::{Level, error, info, span};
 use tracing_appender::non_blocking;
 use tracing_subscriber::{
-    Registry,
-    fmt::layer,
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
+    EnvFilter, Registry, fmt::layer, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 #[derive(Parser, Debug)]
@@ -24,29 +21,46 @@ struct Cli {
 
     #[arg(short = 't', long)]
     num_trans_threads: Option<usize>,
+
+    #[arg(short = 'l', long)]
+    log_file: Option<String>,
 }
 
-#[instrument]
-fn main() {
-    let file = File::create("variadic_perf.log").unwrap();
-    let (non_blocking_writer, _guard) = non_blocking(file);
-
-    let file_layer = layer().with_writer(non_blocking_writer).with_ansi(false);
-
-    Registry::default().with(file_layer).init();
-
-    generate_union! {
-        pub InOutUnion<Input, Output> {
-            Producer: Input, atomic = false;
-            Transformer: Output, atomic = true;
-            Consumer: (), atomic = false;
-        }
+generate_union! {
+    pub InOutUnion<Input, Output> {
+        Producer: Input, atomic = false;
+        Transformer: Output, atomic = true;
+        Consumer: (), atomic = false;
     }
+}
 
+// To see the timings of the fastfifo library, use feature "debug", e.g.
+// RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -o 100
+// to see these timings along with those in main
+// RUST_LOG=info cargo run --release --bin varaidic_perf -F cli,debug -- -o 100
+
+// To see the timings of main
+// RUST_LOG=variadic_perf[main]=info cargo run --release --bin variadic_perf -F cli -- -o 100
+
+// To see no timing info at all (this is not recommended)
+// cargo run --release --bin variadic_perf -F cli -- -o 100
+
+fn main() {
     let Cli {
         nops,
         num_trans_threads,
+        log_file,
     } = Cli::parse();
+
+    let log_file = File::create(log_file.unwrap_or("variadic_perf.log".to_string())).unwrap();
+    let (non_blocking_writer, _guard) = non_blocking(log_file);
+
+    let file_layer = layer().with_writer(non_blocking_writer).with_ansi(false);
+
+    Registry::default()
+        .with(file_layer)
+        .with(EnvFilter::from_default_env())
+        .init();
 
     let nops = nops.unwrap_or(1_000_000_000);
     let num_trans_threads = num_trans_threads.unwrap_or(1);
@@ -55,6 +69,10 @@ fn main() {
     let deadline = epoch + Duration::from_millis(100);
 
     let fifo = InOutUnionFifo::<usize, usize>::new(4, 10);
+
+    let main_span = span!(Level::INFO, "main");
+    let _main_guard = main_span.enter();
+
     let (producer, transformer, consumer) = fifo.split();
 
     let producing_thread = {
@@ -63,6 +81,7 @@ fn main() {
 
         std::thread::spawn(move || {
             let span = span!(Level::INFO, "producer");
+            let _guard = span.enter();
 
             sleep_until(deadline);
 
@@ -71,6 +90,7 @@ fn main() {
             for i in 0..nops {
                 while fifo
                     .transform(|| {
+                        #[cfg(feature = "debug")]
                         info!(parent: &span, "Op {i}: Uninit -> {i}");
                         i
                     })
@@ -85,7 +105,7 @@ fn main() {
         })
     };
 
-    info!("Created prod thread ({:?})", epoch.elapsed());
+    info!(parent: &main_span, "Created prod thread ({:?})", epoch.elapsed());
 
     let mut trans_threads = Vec::with_capacity(num_trans_threads);
     for _ in 0..num_trans_threads {
@@ -94,6 +114,7 @@ fn main() {
 
         trans_threads.push(std::thread::spawn(move || {
             let span = span!(Level::INFO, "transformer");
+            let _guard = span.enter();
 
             sleep_until(deadline); // + Duration::from_millis(1000));
 
@@ -102,6 +123,7 @@ fn main() {
             for i in 0..nops {
                 while fifo
                     .transform(|input| {
+                        #[cfg(feature = "debug")]
                         info!(parent: &span, "Op {i}: {input} -> {}", input + 1);
                         input + 1
                     })
@@ -112,11 +134,11 @@ fn main() {
                 }
             }
 
-            info!(parent: &span, "done");
+            info!(parent: &span, "Done");
         }))
     }
 
-    info!("Created trans threads ({:?})", epoch.elapsed());
+    info!(parent: &main_span, "Created trans threads ({:?})", epoch.elapsed());
 
     let consuming_thread = {
         let fifo = consumer;
@@ -124,19 +146,25 @@ fn main() {
 
         std::thread::spawn(move || {
             let span = span!(Level::INFO, "consumer");
+            let _guard = span.enter();
 
             sleep_until(deadline); // + Duration::from_millis(2000));
 
             info!(parent: &span, "Woken");
 
             for i in 0..nops {
+                let inner_span = span!(parent: &span, Level::INFO, "inner");
+                let _inner_guard = inner_span.enter();
+
                 while fifo
                     .transform(|output| {
-                        info!(parent: &span, "Op {i}: {output} -> Uninit");
+                        #[cfg(feature = "debug")]
+                        info!(parent: &inner_span, "Op {i}: {output} -> Uninit");
+                        #[cfg(feature = "debug")]
                         if output != i + 1 {
-                            error!(parent: &span, "FAILED ASSERTION `output ({output}) == i + 1 ({})`", i + 1);
+                            error!(parent: &inner_span, "FAILED ASSERTION `output ({output}) == i + 1 ({})`", i + 1);
                         } else {
-                            info!(parent: &span, "SUCCEEDED ASSERTION `output == i + 1` ({output})")
+                            info!(parent: &inner_span, "SUCCEEDED ASSERTION `output == i + 1` ({output})")
                         }
                         assert_eq!(output, i + 1)
                     })
@@ -147,24 +175,21 @@ fn main() {
                 }
             }
 
-            info!(parent: &span, "done");
+            info!(parent: &span, "Done");
         })
     };
 
-    info!("Created cons thread ({:?})", epoch.elapsed());
+    info!(parent: &main_span, "Created cons thread ({:?})", epoch.elapsed());
 
     sleep_until(deadline);
 
-    info!("Woken from sleep ({:?})", epoch.elapsed());
+    info!(parent: &main_span, "Woken from sleep ({:?})", epoch.elapsed());
 
     consuming_thread.join().unwrap();
     trans_threads.into_iter().for_each(|t| t.join().unwrap());
     producing_thread.join().unwrap();
 
-    info!("Threads joined ({:?})", epoch.elapsed());
+    info!(parent: &main_span, "Threads joined ({:?})", epoch.elapsed());
 
-    info!(
-        "Estimated rate ({:.2e} ops/s)",
-        nops as f64 / deadline.elapsed().as_secs_f64()
-    )
+    info!(parent: &main_span, "Estimated rate ({:.2e} ops/s)", nops as f64 / deadline.elapsed().as_secs_f64())
 }

@@ -1,3 +1,4 @@
+#[cfg(feature = "debug")]
 use tracing::{info, instrument, warn};
 
 use crate::transform::{
@@ -25,7 +26,7 @@ pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Al
 }
 
 impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, Inner, A> {
-    #[instrument(skip(block_size, rc_alloc))]
+    #[cfg_attr(feature = "debug", instrument(skip(block_size, rc_alloc)))]
     pub fn new_in(block_size: usize, rc_alloc: Rc<A>) -> Self {
         Self {
             _phantom: PhantomData,
@@ -37,7 +38,9 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
                     vec.extend((0..Tag::num_transformations()).map(|i| {
                         let field = Field::from_parts(block_size, 0, 0);
 
+                        #[cfg(feature = "debug")]
                         info!("Atomics[{i}] = {field:?}");
+                        let _ = i;
 
                         AtomicPair::from(field)
                     }));
@@ -66,23 +69,26 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
         (self.get_atomics(tag), self.get_atomics(tag.chases()))
     }
 
-    #[instrument(skip(self, tag))]
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
     pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, A> {
         let (current, chasing) = self.get_current_chasing(tag);
 
         loop {
             let current_take = current.load_take();
 
+            #[cfg(feature = "debug")]
             info!(?current_take);
 
             // current_take=Field { index_max: 10, version: 47, index: 0 }
 
             if current_take.get_index() >= self.block_size {
+                #[cfg(feature = "debug")]
                 info!("BlockDone");
                 break ReserveState::BlockDone;
             } else {
                 let chasing_give = chasing.load_give();
 
+                #[cfg(feature = "debug")]
                 info!(?chasing_give);
 
                 // chasing_give=Field { index_max: 10, version: 46, index: 10 }
@@ -95,16 +101,19 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
                             > chasing_give.get_version()
                                 + if tag == Tag::producer() { 1 } else { 0 }
                     {
+                        #[cfg(feature = "debug")]
                         warn!("NotAvailable");
                         break ReserveState::NotAvailable;
                     } else {
                         let chasing_take = chasing.load_take();
 
+                        #[cfg(feature = "debug")]
                         info!(?chasing_take);
 
                         // chasing_take=Field { index_max: 10, version: 46, index: 10 }
 
                         if chasing_take.get_index() > chasing_give.get_index() {
+                            #[cfg(feature = "debug")]
                             warn!("Busy");
                             break ReserveState::Busy;
                         }
@@ -112,11 +121,13 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
                 }
 
                 let current_take_overflowing_add = current_take.overflowing_add(1);
+                #[cfg(feature = "debug")]
                 info!(?current_take_overflowing_add);
 
                 // current_take_overflowing_add=Field { index_max: 10, version: 47, index: 1 }
 
                 let fetch_max_result = current.fetch_max_take(current_take_overflowing_add);
+                #[cfg(feature = "debug")]
                 info!(?fetch_max_result);
 
                 // fetch_max_result=Field { index_max: 10, version: 47, index: 0 }

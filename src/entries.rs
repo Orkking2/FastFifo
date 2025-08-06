@@ -1,5 +1,5 @@
 use crate::block::Block;
-use std::{mem::ManuallyDrop, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 /// Think of this as an allocator giving you exactly one *mut T.
 pub struct ProducingEntry<'a, T, const BLOCK_SIZE: usize>(
