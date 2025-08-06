@@ -47,6 +47,9 @@ generate_union! {
 // To see no timing info at all (this is not recommended)
 // cargo run --release --bin variadic_perf -F cli -- -o 100
 
+// With example options
+// RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -t 10 -o 100 -l out.log
+
 fn main() {
     let Cli {
         nops,
