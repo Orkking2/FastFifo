@@ -1,9 +1,8 @@
-use crate::{
-    Result,
+use super::{
+    Error, Result,
     atomic::AtomicField,
     block::{AllocState, Block, ReserveState},
     entries::{ConsumingEntry, ProducingEntry},
-    error::Error,
     field::{Field, FieldConfig},
 };
 use std::{array, fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};

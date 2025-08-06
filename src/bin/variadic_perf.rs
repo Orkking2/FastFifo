@@ -1,6 +1,9 @@
 #![feature(thread_sleep_until)]
 #![feature(allocator_api)]
 
+#[cfg(feature = "debug")]
+use tracing::error;
+
 use clap::Parser;
 use fastfifo::generate_union;
 use std::{
@@ -8,7 +11,7 @@ use std::{
     thread::sleep_until,
     time::{Duration, Instant},
 };
-use tracing::{Level, error, info, span};
+use tracing::{Level, info, span};
 use tracing_appender::non_blocking;
 use tracing_subscriber::{
     EnvFilter, Registry, fmt::layer, layer::SubscriberExt, util::SubscriberInitExt,
@@ -134,6 +137,7 @@ fn main() {
                     // sleep(Duration::from_millis(100));
                     std::hint::spin_loop();
                 }
+                let _ = i;
             }
 
             info!("Done");

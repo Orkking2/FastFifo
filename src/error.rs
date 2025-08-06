@@ -1,6 +1,5 @@
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Error {
-    Full,
+    NotAvailable,
     Busy,
-    Empty,
 }

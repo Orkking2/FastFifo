@@ -226,11 +226,11 @@ pub(crate) fn do_generate_union(
         return quote! { compile_error!("Must have at least two layers!") };
     }
 
-    let fifo_transform_path = quote! { ::fastfifo::transform };
-    let fifo_config_path = quote! { #fifo_transform_path ::config };
-    let entry_descriptor = quote! { #fifo_transform_path ::entry_descriptor::EntryDescriptor };
+    let fifo_path = quote! { ::fastfifo };
+    let fifo_config_path = quote! { #fifo_path ::config };
+    let entry_descriptor = quote! { #fifo_path ::entry_descriptor::EntryDescriptor };
     let manually_drop = quote! { ::core::mem::ManuallyDrop };
-    let result = quote! { #fifo_transform_path ::Result };
+    let result = quote! { #fifo_path ::Result };
     let std_alloc = quote! { ::std::alloc };
 
     let (impl_generic, ty_generic, where_clause) = generics.split_for_impl();
@@ -446,7 +446,7 @@ pub(crate) fn do_generate_union(
         }
 
         #vis struct #fifo_name #default_alloc_generics (
-            #fifo_transform_path ::FastFifo<#tag_name, #name #ty_generic, A>,
+            #fifo_path ::FastFifo<#tag_name, #name #ty_generic, A>,
         ) #where_clause;
 
         impl #alloc_impl_generic #fifo_config_path ::TaggedClone<#tag_name> for #fifo_name #alloc_ty_generic #where_clause
@@ -459,14 +459,14 @@ pub(crate) fn do_generate_union(
         impl #impl_generic #fifo_name #ty_generic #where_clause {
             #[allow(dead_code)]
             pub fn new(num_blocks: usize, block_size: usize) -> Self {
-                Self(#fifo_transform_path ::FastFifo::new(num_blocks, block_size))
+                Self(#fifo_path ::FastFifo::new(num_blocks, block_size))
             }
         }
 
         impl #alloc_impl_generic #fifo_name #alloc_ty_generic #where_clause {
             #[allow(dead_code)]
             pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
-                Self(#fifo_transform_path ::FastFifo::new_in(num_blocks, block_size, alloc))
+                Self(#fifo_path ::FastFifo::new_in(num_blocks, block_size, alloc))
             }
 
             #[allow(dead_code)]

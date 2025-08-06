@@ -1,13 +1,20 @@
-use crate::{
-    Result,
+use self::{
     entries::{ConsumingEntry, ProducingEntry},
+    error::Error,
 };
 use fifo::FastFifoInner;
 use std::{fmt::Debug, sync::Arc};
 
+mod atomic;
+mod block;
+mod entries;
+mod error;
+mod field;
 mod fifo;
 #[cfg(test)]
 mod test;
+
+pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone)]
 pub struct FastFifo<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(

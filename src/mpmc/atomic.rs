@@ -1,4 +1,4 @@
-use crate::field::Field;
+use super::field::Field;
 use std::{
     fmt::Debug,
     sync::atomic::{AtomicUsize, Ordering},

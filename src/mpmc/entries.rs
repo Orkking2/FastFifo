@@ -1,4 +1,4 @@
-use crate::block::Block;
+use super::block::Block;
 use std::sync::atomic::Ordering;
 
 /// Think of this as an allocator giving you exactly one *mut T.
@@ -40,6 +40,7 @@ impl<'a, T, const BLOCK_SIZE: usize> Drop for ConsumingEntry<'a, T, BLOCK_SIZE> 
 pub(crate) struct EntryDescription<'a, T, const BLOCK_SIZE: usize> {
     pub(crate) block: &'a Block<T, BLOCK_SIZE>,
     pub(crate) index: usize,
+    #[allow(dead_code)]
     pub(crate) version: usize,
 }
 

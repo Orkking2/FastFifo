@@ -1,4 +1,4 @@
-use crate::transform::field::Field;
+use crate::field::Field;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[repr(C)]
