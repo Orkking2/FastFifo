@@ -8,8 +8,14 @@ pub struct AtomicPair {
     give: AtomicUsize,
 }
 
+impl From<Field> for AtomicPair {
+    fn from(value: Field) -> Self {
+        Self::from_raw_parts(value.get_index_max(), value.get_raw_inner())
+    }
+}
+
 impl AtomicPair {
-    pub fn new(index_max: usize, value: usize) -> Self {
+    pub fn from_raw_parts(index_max: usize, value: usize) -> Self {
         Self {
             index_max,
             take: AtomicUsize::new(value),
@@ -26,7 +32,10 @@ impl AtomicPair {
     // }
 
     pub fn fetch_max_take(&self, val: Field) -> Field {
-        Field::from_raw_parts(self.index_max, self.take.fetch_max(val.get_raw_inner(), Ordering::Relaxed))
+        Field::from_raw_parts(
+            self.index_max,
+            self.take.fetch_max(val.get_raw_inner(), Ordering::Relaxed),
+        )
     }
 
     /// Must be aquire so previous give stores are seen before this one is loaded
@@ -40,13 +49,14 @@ impl AtomicPair {
     }
 
     pub fn fetch_max_give(&self, val: Field) -> Field {
-        Field::from_raw_parts(self.index_max, self.give.fetch_max(val.get_raw_inner(), Ordering::Relaxed))
+        Field::from_raw_parts(
+            self.index_max,
+            self.give.fetch_max(val.get_raw_inner(), Ordering::Relaxed),
+        )
     }
 
     /// Returns old (give, take)
-    pub fn fetch_max_both<T: Into<Field>>(&self, val: T) -> (Field, Field) {
-        let val = val.into();
-
+    pub fn fetch_max_both(&self, val: Field) -> (Field, Field) {
         (self.fetch_max_give(val), self.fetch_max_take(val))
     }
 }

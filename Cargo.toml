@@ -9,6 +9,10 @@ edition = "2024"
 derive_more = { version = "2.0.1", features = ["into", "from"] }
 fastfifoprocmacro = { path = "./fastfifoprocmacro" }
 clap = { version = "4.5.41", features = ["derive"], optional = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
+tracing-appender = "0.2"
 
 [features]
 cli = ["clap"]

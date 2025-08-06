@@ -39,13 +39,13 @@ pub trait IndexedDrop<Tag: FifoTag> {
     }
 }
 
-pub trait FifoTag: TryFrom<usize, Error: Debug> + Into<usize> + Copy {
+pub trait FifoTag: TryFrom<usize, Error: Debug> + Into<usize> + Copy + Debug {
     fn is_atomic(self) -> bool;
     fn chases(self) -> Self;
 
     fn producer() -> Self;
     /// It is expected that every element in 0..Tag::num_transformations() can be converted to a Tag.
-    /// 
+    ///
     /// Make sure to implement a Self::try_from(Tag::num_transformations()) for custom drop behaviour.
     fn num_transformations() -> usize;
 }

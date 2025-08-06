@@ -1,7 +1,10 @@
+use tracing::{info, instrument, warn};
+
 use crate::transform::{
     atom_pair::AtomicPair,
     config::{FifoTag, IndexedDrop},
     entry_descriptor::EntryDescriptor,
+    field::Field,
 };
 use std::{alloc::Allocator, marker::PhantomData, ptr::NonNull, rc::Rc};
 
@@ -22,34 +25,34 @@ pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Al
 }
 
 impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, Inner, A> {
-    pub fn new(block_size: usize, is_full_consumer: bool, rc_alloc: Rc<A>) -> Self {
+    #[instrument(skip(block_size, rc_alloc))]
+    pub fn new_in(block_size: usize, rc_alloc: Rc<A>) -> Self {
         Self {
             _phantom: PhantomData,
             atomics: unsafe {
                 NonNull::new_unchecked(Box::into_raw({
-                    if is_full_consumer {
-                        let mut vec = Vec::new_in(rc_alloc.as_ref());
-                        vec.reserve(block_size);
+                    let mut vec = Vec::new_in(rc_alloc.as_ref());
+                    vec.reserve(Tag::num_transformations());
 
-                        vec.extend((0..Tag::num_transformations()).map(|i| {
-                            let tag = Tag::try_from(i).unwrap();
-
-                            if tag.into() == Tag::producer().chases().into() {
-                                AtomicPair::new(block_size, block_size)
+                    vec.extend((0..Tag::num_transformations()).map(|i| {
+                        let field = Field::from_parts(
+                            block_size,
+                            // The "consumer" (whatever the producer chases) takes an imaginary trip around the queue
+                            // which would normally increment its version.
+                            if i == Tag::producer().chases().into() {
+                                1
                             } else {
-                                AtomicPair::new(block_size, 0)
-                            }
-                        }));
+                                0
+                            },
+                            0,
+                        );
 
-                        vec.into_boxed_slice()
-                    } else {
-                        let mut vec = Vec::new_in(rc_alloc.as_ref());
-                        vec.resize_with(Tag::num_transformations(), || {
-                            AtomicPair::new(block_size, 0)
-                        });
+                        info!("Atomics[{i}] = {field:?}");
 
-                        vec.into_boxed_slice()
-                    }
+                        AtomicPair::from(field)
+                    }));
+
+                    vec.into_boxed_slice()
                 }))
             },
             entries: unsafe {
@@ -73,30 +76,46 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
         (self.get_atomics(tag), self.get_atomics(tag.chases()))
     }
 
+    #[instrument(skip(self, tag))]
     pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, A> {
         let (current, chasing) = self.get_current_chasing(tag);
 
         loop {
             let current_take = current.load_take();
 
+            info!(?current_take);
+
             if current_take.get_index() >= self.block_size {
+                info!("BlockDone");
                 break ReserveState::BlockDone;
             } else {
                 let chasing_give = chasing.load_give();
 
+                info!(?chasing_give);
+
                 if current_take.get_version() >= chasing_give.get_version() {
                     if current_take.get_index() == chasing_give.get_index() {
+                        warn!("NotAvailable");
                         break ReserveState::NotAvailable;
                     } else {
                         let chasing_take = chasing.load_take();
 
+                        info!(?chasing_take);
+
                         if chasing_take.get_index() > chasing_give.get_index() {
+                            warn!("Busy");
                             break ReserveState::Busy;
                         }
                     }
                 }
 
-                if current.fetch_max_take(current_take.overflowing_add(1)) == current_take {
+                let current_take_overflowing_add = current_take.overflowing_add(1);
+                info!(?current_take_overflowing_add);
+                
+                let fetch_max_result = current.fetch_max_take(current_take_overflowing_add);
+                info!(?fetch_max_result);
+
+                if fetch_max_result == current_take {
                     break ReserveState::Success(EntryDescriptor {
                         block: &self,
                         index: current_take.get_index(),
@@ -128,7 +147,6 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop for Blo
                 }
             })
             .collect::<Vec<_>>();
-        // ;
 
         //         v [2].give (1)
         //         |         v [2].take (2)
@@ -161,7 +179,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop for Blo
         }
 
         // Now we free the memory used by this block.
-        unsafe { 
+        unsafe {
             Box::from_raw_in(self.atomics.as_ptr(), self.rc_alloc.as_ref());
             Box::from_raw_in(self.entries.as_ptr(), self.rc_alloc.as_ref());
         }

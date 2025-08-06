@@ -6,22 +6,22 @@ pub struct FieldConfig {
     pub index: usize,
 }
 
-impl Into<Field> for FieldConfig {
-    fn into(self) -> Field {
-        let FieldConfig {
-            index_max,
-            version,
-            index,
-        } = self;
-
-        Field::from_parts(index_max, version, index)
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct Field {
     index_max: usize,
     inner: usize,
+}
+
+impl From<FieldConfig> for Field {
+    fn from(
+        FieldConfig {
+            index_max,
+            version,
+            index,
+        }: FieldConfig,
+    ) -> Self {
+        Self::from_parts(index_max, version, index)
+    }
 }
 
 impl Field {
@@ -49,21 +49,8 @@ impl Field {
         self.inner >> Self::version_shift(self.index_max)
     }
 
-    pub fn set_version(&mut self, version: usize) -> &mut Self {
-        self.inner = (version << Self::version_shift(self.index_max)) | self.get_index();
-
-        self
-    }
-
     pub const fn get_index(&self) -> usize {
         self.inner & Self::index_mask(self.index_max)
-    }
-
-    pub fn set_index(&mut self, index: usize) -> &mut Self {
-        self.inner = (index & Self::index_mask(self.index_max))
-            | (self.get_version() << Self::version_shift(self.index_max));
-
-        self
     }
 
     pub fn get_index_max(&self) -> usize {

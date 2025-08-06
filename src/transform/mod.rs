@@ -4,7 +4,10 @@ use crate::transform::{
     error::Error,
     fifo::FastFifoInner,
 };
-use std::{alloc::{Allocator, Global}, sync::Arc};
+use std::{
+    alloc::{Allocator, Global},
+    sync::Arc,
+};
 
 pub use fastfifoprocmacro::generate_union;
 
@@ -19,7 +22,6 @@ mod block;
 mod field;
 mod fifo;
 mod head;
-mod wide_field;
 
 pub struct FastFifo<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator = Global>(
     Arc<FastFifoInner<Tag, Inner, A>>,
@@ -49,9 +51,7 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
     }
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator>
-    FastFifo<Tag, Inner, A>
-{
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifo<Tag, Inner, A> {
     pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner, A>> {
         self.0.get_entry(tag)
     }
