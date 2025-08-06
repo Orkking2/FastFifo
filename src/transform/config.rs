@@ -39,7 +39,7 @@ pub trait IndexedDrop<Tag: FifoTag> {
     }
 }
 
-pub trait FifoTag: TryFrom<usize, Error: Debug> + Into<usize> + Copy + Debug {
+pub trait FifoTag: TryFrom<usize, Error: Debug> + Into<usize> + Copy + Debug + PartialEq {
     fn is_atomic(self) -> bool;
     fn chases(self) -> Self;
 

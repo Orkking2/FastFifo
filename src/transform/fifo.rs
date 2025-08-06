@@ -13,6 +13,7 @@ use crate::transform::{
 use std::{alloc::Allocator, ptr::NonNull, rc::Rc};
 
 pub(crate) struct FastFifoInner<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
+    // num_heads == Tag::num_transformations()
     heads: NonNull<[NonNull<dyn Atomic>]>,
     blocks: NonNull<[Block<Tag, Inner, A>]>,
     num_blocks: usize,
@@ -50,17 +51,7 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
                     vec.extend((0..Tag::num_transformations()).map(|i| {
                         let tag = Tag::try_from(i).unwrap();
 
-                        let field = Field::from_parts(
-                            num_blocks,
-                            // The "consumer" (whatever the producer chases) takes an imaginary trip around the queue
-                            // which would normally increment its version.
-                            if i == Tag::producer().chases().into() {
-                                1
-                            } else {
-                                0
-                            },
-                            0,
-                        );
+                        let field = Field::from_parts(num_blocks, 0, 0);
 
                         info!("Head[{i}] = {field:?}");
 
@@ -95,15 +86,15 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
 }
 
 impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInner<Tag, Inner, A> {
-    #[instrument(skip(self))]
     fn get_head(&self, tag: Tag) -> &dyn Atomic {
         // Safety: this pointer can be turned into a reference because I said so.
         unsafe { self.heads.as_ref().get(tag.into()).unwrap().as_ref() }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, tag))]
     fn get_block(&self, tag: Tag) -> (Field, &Block<Tag, Inner, A>) {
         let head = self.get_head(tag).load();
+        info!(?head);
 
         unsafe { (head.clone(), &self.blocks.as_ref()[head.get_index()]) }
     }
@@ -183,8 +174,6 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
 
         loop {
             let (head, block) = self.get_block(tag);
-
-            info!(?head);
 
             match block.reserve_in_layer(tag) {
                 ReserveState::Success(entry_descriptor) => {

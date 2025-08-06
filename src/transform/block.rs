@@ -35,17 +35,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
                     vec.reserve(Tag::num_transformations());
 
                     vec.extend((0..Tag::num_transformations()).map(|i| {
-                        let field = Field::from_parts(
-                            block_size,
-                            // The "consumer" (whatever the producer chases) takes an imaginary trip around the queue
-                            // which would normally increment its version.
-                            if i == Tag::producer().chases().into() {
-                                1
-                            } else {
-                                0
-                            },
-                            0,
-                        );
+                        let field = Field::from_parts(block_size, 0, 0);
 
                         info!("Atomics[{i}] = {field:?}");
 
@@ -85,6 +75,8 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
 
             info!(?current_take);
 
+            // current_take=Field { index_max: 10, version: 47, index: 0 }
+
             if current_take.get_index() >= self.block_size {
                 info!("BlockDone");
                 break ReserveState::BlockDone;
@@ -93,14 +85,24 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
 
                 info!(?chasing_give);
 
-                if current_take.get_version() >= chasing_give.get_version() {
-                    if current_take.get_index() == chasing_give.get_index() {
+                // chasing_give=Field { index_max: 10, version: 46, index: 10 }
+
+                if current_take.get_version()
+                    >= chasing_give.get_version() + if tag == Tag::producer() { 1 } else { 0 }
+                {
+                    if current_take.get_index() == chasing_give.get_index()
+                        || current_take.get_version()
+                            > chasing_give.get_version()
+                                + if tag == Tag::producer() { 1 } else { 0 }
+                    {
                         warn!("NotAvailable");
                         break ReserveState::NotAvailable;
                     } else {
                         let chasing_take = chasing.load_take();
 
                         info!(?chasing_take);
+
+                        // chasing_take=Field { index_max: 10, version: 46, index: 10 }
 
                         if chasing_take.get_index() > chasing_give.get_index() {
                             warn!("Busy");
@@ -111,9 +113,13 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
 
                 let current_take_overflowing_add = current_take.overflowing_add(1);
                 info!(?current_take_overflowing_add);
-                
+
+                // current_take_overflowing_add=Field { index_max: 10, version: 47, index: 1 }
+
                 let fetch_max_result = current.fetch_max_take(current_take_overflowing_add);
                 info!(?fetch_max_result);
+
+                // fetch_max_result=Field { index_max: 10, version: 47, index: 0 }
 
                 if fetch_max_result == current_take {
                     break ReserveState::Success(EntryDescriptor {
