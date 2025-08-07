@@ -26,7 +26,7 @@ struct Cli {
     num_blocks: usize,
 
     #[arg(short = 'o', long)]
-    nops: Option<usize>,
+    nops: usize,
 
     #[arg(short = 't', long)]
     num_trans_threads: Option<usize>,
