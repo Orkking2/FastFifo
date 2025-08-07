@@ -78,7 +78,6 @@ fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let nops = nops.unwrap_or(1_000_000_000);
     let num_trans_threads = num_trans_threads.unwrap_or(1);
 
     let epoch = Instant::now();
