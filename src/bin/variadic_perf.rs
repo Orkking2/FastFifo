@@ -19,6 +19,12 @@ use tracing_subscriber::{
 
 #[derive(Parser, Debug)]
 struct Cli {
+    #[arg(short = 'b', long)]
+    block_size: usize,
+
+    #[arg(short = 'n', long)]
+    num_blocks: usize,
+
     #[arg(short = 'o', long)]
     nops: Option<usize>,
 
@@ -38,26 +44,28 @@ generate_union! {
 }
 
 // To see the timings of the fastfifo library, use feature "debug"
-// RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -o 100
+// RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -n 4 -b 100 -o 100
 // to see these timings along with those in main
-// RUST_LOG=info cargo run --release --bin varaidic_perf -F cli,debug -- -o 100
+// RUST_LOG=info cargo run --release --bin varaidic_perf -F cli,debug -- -n 4 -b 100 -o 100
 
 // To see the timings of main
-// RUST_LOG=variadic_perf=info cargo run --release --bin variadic_perf -F cli -- -o 100
+// RUST_LOG=variadic_perf=info cargo run --release --bin variadic_perf -F cli -- -n 4 -b 100 -o 100
 // To see thread timings (slows library)
-// RUST_LOG=variadic_perf=info cargo run --release --bin variadic_perf -F cli,debug -- -o 100
+// RUST_LOG=variadic_perf=info cargo run --release --bin variadic_perf -F cli,debug -- -n 4 -b 100 -o 100
 
 // To see no timing info at all (this is not recommended)
-// cargo run --release --bin variadic_perf -F cli -- -o 100
+// cargo run --release --bin variadic_perf -F cli -- -n 4 -b 100 -o 100
 
 // With example options
-// RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -t 10 -o 100 -l out.log
+// RUST_LOG=fastfifo=info cargo run --release --bin varaidic_perf -F cli,debug -- -n 100 -b 1000 -t 10 -o 100 -l out.log
 
 fn main() {
     let Cli {
         nops,
         num_trans_threads,
         log_file,
+        block_size,
+        num_blocks,
     } = Cli::parse();
 
     let log_file = File::create(log_file.unwrap_or("variadic_perf.log".to_string())).unwrap();
@@ -76,7 +84,7 @@ fn main() {
     let epoch = Instant::now();
     let deadline = epoch + Duration::from_millis(100);
 
-    let fifo = InOutUnionFifo::<usize, usize>::new(4, 10);
+    let fifo = InOutUnionFifo::<usize, usize>::new(num_blocks, block_size);
 
     let (producer, transformer, consumer) = fifo.split();
 
