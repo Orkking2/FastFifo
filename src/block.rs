@@ -25,7 +25,7 @@ pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Al
 }
 
 impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, Inner, A> {
-    #[cfg_attr(feature = "debug", instrument(skip(block_size, rc_alloc)))]
+    #[cfg_attr(feature = "debug", instrument(skip(block_size, alloc)))]
     pub fn new_in(block_size: usize, alloc: &A) -> Self {
         Self {
             _phantom: PhantomData,
