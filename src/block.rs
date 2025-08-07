@@ -7,15 +7,14 @@ use crate::{
     entry_descriptor::EntryDescriptor,
     field::Field,
 };
-use std::{alloc::Allocator, marker::PhantomData, ptr::NonNull, rc::Rc};
+use std::{alloc::Allocator, marker::PhantomData, ptr::NonNull};
 
 #[repr(C)]
 pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
-    _phantom: PhantomData<Tag>,
+    _phantom: PhantomData<(Tag, A)>,
     atomics: NonNull<[AtomicPair]>,
     entries: NonNull<[Inner]>,
     block_size: usize,
-    rc_alloc: Rc<A>,
 }
 
 pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
@@ -27,37 +26,42 @@ pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Al
 
 impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, Inner, A> {
     #[cfg_attr(feature = "debug", instrument(skip(block_size, rc_alloc)))]
-    pub fn new_in(block_size: usize, rc_alloc: Rc<A>) -> Self {
+    pub fn new_in(block_size: usize, alloc: &A) -> Self {
         Self {
             _phantom: PhantomData,
             atomics: unsafe {
-                NonNull::new_unchecked(Box::into_raw({
-                    let mut vec = Vec::new_in(rc_alloc.as_ref());
-                    vec.reserve(Tag::num_transformations());
+                NonNull::new_unchecked(
+                    Box::into_raw_with_allocator({
+                        let mut vec = Vec::new_in(alloc);
+                        vec.reserve(Tag::num_transformations());
 
-                    vec.extend((0..Tag::num_transformations()).map(|i| {
-                        let field = Field::from_parts(block_size, 0, 0);
+                        vec.extend((0..Tag::num_transformations()).map(|i| {
+                            let field = Field::from_parts(block_size, 0, 0);
 
-                        #[cfg(feature = "debug")]
-                        info!("Atomics[{i}] = {field:?}");
-                        let _ = i;
+                            #[cfg(feature = "debug")]
+                            info!("Atomics[{i}] = {field:?}");
+                            let _ = i;
 
-                        AtomicPair::from(field)
-                    }));
+                            AtomicPair::from(field)
+                        }));
 
-                    vec.into_boxed_slice()
-                }))
+                        vec.into_boxed_slice()
+                    })
+                    .0,
+                )
             },
             entries: unsafe {
-                NonNull::new_unchecked(Box::into_raw({
-                    let mut vec = Vec::new_in(rc_alloc.as_ref());
-                    vec.resize_with(block_size, Inner::default);
+                NonNull::new_unchecked(
+                    Box::into_raw_with_allocator({
+                        let mut vec = Vec::new_in(alloc);
+                        vec.resize_with(block_size, Inner::default);
 
-                    vec.into_boxed_slice()
-                }))
+                        vec.into_boxed_slice()
+                    })
+                    .0,
+                )
             },
             block_size,
-            rc_alloc,
         }
     }
 
@@ -148,10 +152,8 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
     pub unsafe fn get_ptr(&self, index: usize) -> *mut Inner {
         unsafe { &self.entries.as_ref()[index] as *const Inner as *mut Inner }
     }
-}
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop for Block<Tag, Inner, A> {
-    fn drop(&mut self) {
+    pub fn drop_in(&mut self, alloc: &A) {
         let x = (0..Tag::num_transformations())
             .map(|i| {
                 let atomic_pair = unsafe { &self.atomics.as_ref()[i] };
@@ -197,8 +199,8 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop for Blo
 
         // Now we free the memory used by this block.
         unsafe {
-            Box::from_raw_in(self.atomics.as_ptr(), self.rc_alloc.as_ref());
-            Box::from_raw_in(self.entries.as_ptr(), self.rc_alloc.as_ref());
+            drop(Box::from_raw_in(self.atomics.as_ptr(), alloc));
+            drop(Box::from_raw_in(self.entries.as_ptr(), alloc));
         }
     }
 }
