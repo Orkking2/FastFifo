@@ -76,14 +76,13 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
     pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, A> {
         let (current, chasing) = self.get_current_chasing(tag);
+        let producer_offset = if tag == Tag::producer() { 1 } else { 0 };
 
         loop {
             let current_take = current.load_take();
 
             #[cfg(feature = "debug")]
             info!(?current_take);
-
-            // current_take=Field { index_max: 10, version: 47, index: 0 }
 
             if current_take.get_index() >= self.block_size {
                 #[cfg(feature = "debug")]
@@ -95,15 +94,9 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
                 #[cfg(feature = "debug")]
                 info!(?chasing_give);
 
-                // chasing_give=Field { index_max: 10, version: 46, index: 10 }
-
-                if current_take.get_version()
-                    >= chasing_give.get_version() + if tag == Tag::producer() { 1 } else { 0 }
-                {
+                if current_take.get_version() >= chasing_give.get_version() + producer_offset {
                     if current_take.get_index() == chasing_give.get_index()
-                        || current_take.get_version()
-                            > chasing_give.get_version()
-                                + if tag == Tag::producer() { 1 } else { 0 }
+                        || current_take.get_version() > chasing_give.get_version() + producer_offset
                     {
                         #[cfg(feature = "debug")]
                         warn!("NotAvailable");
@@ -113,8 +106,6 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
 
                         #[cfg(feature = "debug")]
                         info!(?chasing_take);
-
-                        // chasing_take=Field { index_max: 10, version: 46, index: 10 }
 
                         if chasing_take.get_index() > chasing_give.get_index() {
                             #[cfg(feature = "debug")]
@@ -128,13 +119,9 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
                 #[cfg(feature = "debug")]
                 info!(?current_take_overflowing_add);
 
-                // current_take_overflowing_add=Field { index_max: 10, version: 47, index: 1 }
-
                 let fetch_max_result = current.fetch_max_take(current_take_overflowing_add);
                 #[cfg(feature = "debug")]
                 info!(?fetch_max_result);
-
-                // fetch_max_result=Field { index_max: 10, version: 47, index: 0 }
 
                 if fetch_max_result == current_take {
                     break ReserveState::Success(EntryDescriptor {

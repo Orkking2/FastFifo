@@ -17,6 +17,8 @@ use tracing_subscriber::{
     EnvFilter, Registry, fmt::layer, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
+// [MAl]
+
 #[derive(Parser, Debug)]
 struct Cli {
     #[arg(short = 'b', long)]

@@ -156,7 +156,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
 
             let new_next_current = Field::from(FieldConfig {
                 index_max: self.block_size,
-                version: head.get_version() + 1,
+                version: head.get_version() + /* Only inc vsn if idx needs to be reset */ if head.get_index() != 0 { 1 } else { 0 },
                 index: 0,
             });
             #[cfg(feature = "debug")]
@@ -184,7 +184,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
         }
     }
 
-    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
+    #[cfg_attr(feature = "debug", instrument(skip(self)))]
     pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner, A>> {
         //         v [2].give (1)
         //         |         v [2].take (2)
