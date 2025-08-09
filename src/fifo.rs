@@ -154,9 +154,13 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
         } {
             // Success, update atomics in nblk and cached head
 
+            let next_current_give = next_current.load_give();
+            #[cfg(feature = "debug")]
+            info!(?next_current_give);
+
             let new_next_current = Field::from(FieldConfig {
                 index_max: self.block_size,
-                version: head.get_version() + /* Only inc vsn if idx needs to be reset */ if head.get_index() != 0 { 1 } else { 0 },
+                version: head.get_version() + /* Only inc vsn if idx needs to be reset */ if next_current_give.get_index() != 0 { 1 } else { 0 },
                 index: 0,
             });
             #[cfg(feature = "debug")]
