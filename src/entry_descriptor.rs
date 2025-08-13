@@ -2,9 +2,9 @@ use crate::{
     block::Block,
     config::{FifoTag, IndexedDrop},
 };
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 
-pub struct EntryDescriptor<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
+pub struct EntryDescriptor<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator = Global> {
     pub(crate) block: &'a Block<Tag, Inner, A>,
     pub(crate) index: usize,
     pub(crate) tag: Tag,

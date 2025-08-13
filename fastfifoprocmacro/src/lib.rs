@@ -274,17 +274,17 @@ pub(crate) fn do_generate_union(
 
     let mut alloc_generics = generics.clone();
 
-    alloc_generics
-        .params
-        .push(parse_quote! { A: #std_alloc ::Allocator });
+    // alloc_generics
+    //     .params
+    //     .push(parse_quote! { A: #std_alloc ::Allocator });
 
     let (alloc_impl_generic, alloc_ty_generic, _) = alloc_generics.split_for_impl();
 
     let mut default_alloc_generics = generics.clone();
 
-    default_alloc_generics
-        .params
-        .push(parse_quote! { A: #std_alloc ::Allocator = #std_alloc ::Global });
+    // default_alloc_generics
+    //     .params
+    //     .push(parse_quote! { A: #std_alloc ::Allocator = #std_alloc ::Global });
 
     let mut lifetime_generics = alloc_generics.clone();
 
@@ -446,7 +446,7 @@ pub(crate) fn do_generate_union(
         }
 
         #vis struct #fifo_name #default_alloc_generics (
-            #fifo_path ::FastFifo<#tag_name, #name #ty_generic, A>,
+            #fifo_path ::FastFifo<#tag_name, #name #ty_generic>//, A>,
         ) #where_clause;
 
         impl #alloc_impl_generic #fifo_config_path ::TaggedClone<#tag_name> for #fifo_name #alloc_ty_generic #where_clause
@@ -464,13 +464,13 @@ pub(crate) fn do_generate_union(
         }
 
         impl #alloc_impl_generic #fifo_name #alloc_ty_generic #where_clause {
-            #[allow(dead_code)]
-            pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
-                Self(#fifo_path ::FastFifo::new_in(num_blocks, block_size, alloc))
-            }
+            // #[allow(dead_code)]
+            // pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
+            //     Self(#fifo_path ::FastFifo::new_in(num_blocks, block_size, alloc))
+            // }
 
             #[allow(dead_code)]
-            pub fn get_entry(&self, tag: #tag_name) -> #result <#entry_descriptor <'_, #tag_name, #name #ty_generic, A>> {
+            pub fn get_entry(&self, tag: #tag_name) -> #result <#entry_descriptor <'_, #tag_name, #name #ty_generic>>{//, A>> {
                 self.0.get_entry(tag)
             }
 
@@ -486,21 +486,21 @@ pub(crate) fn do_generate_union(
 
         #(
             #vis struct #variant_entries #lifetime_impl_generic (
-                #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>
+                #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic>//, A>
             ) #where_clause;
 
-            impl #lifetime_impl_generic From<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>>
+            impl #lifetime_impl_generic From<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic>>//, A>>
                 for #variant_entries #lifetime_ty_generic #where_clause
             {
-                fn from(value: #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>) -> Self {
+                fn from(value: #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic>) -> Self {//, A>) -> Self {
                     Self(value)
                 }
             }
 
-            impl #lifetime_impl_generic Into<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A>>
+            impl #lifetime_impl_generic Into<#entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic>>//, A>>
                 for #variant_entries #lifetime_ty_generic #where_clause
             {
-                fn into(self) -> #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic, A> {
+                fn into(self) -> #entry_descriptor <'entry_descriptor_lifetime, #tag_name, #name #ty_generic>{//, A> {
                     self.0
                 }
             }
