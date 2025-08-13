@@ -11,21 +11,24 @@ use crate::{
     field::FieldConfig,
     head::{Atomic, AtomicHead, NonAtomicHead},
 };
-use std::{alloc::Allocator, ptr::NonNull};
+use std::{/*alloc::Allocator,*/ ptr::NonNull};
 
-pub(crate) struct FastFifoInner<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
+pub(crate) struct FastFifoInner<
+    Tag: FifoTag,
+    Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/
+> {
     // num_heads == Tag::num_transformations()
     heads: NonNull<[NonNull<dyn Atomic>]>,
-    blocks: NonNull<[Block<Tag, Inner, A>]>,
+    blocks: NonNull<[Block<Tag, Inner /*A*/>]>,
     num_blocks: usize,
     block_size: usize,
-    alloc: A,
+    // alloc: A,
 }
 
 #[rustfmt::skip]
-unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Send for FastFifoInner<Tag, Inner, A> {}
+unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Send for FastFifoInner<Tag, Inner, /*A*/> {}
 #[rustfmt::skip]
-unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Sync for FastFifoInner<Tag, Inner, A> {}
+unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Sync for FastFifoInner<Tag, Inner, /*A*/> {}
 
 #[derive(Debug)]
 enum AdvanceHeadStatus {
@@ -33,16 +36,16 @@ enum AdvanceHeadStatus {
     Success,
 }
 
-impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
-    FastFifoInner<Tag, Inner, A>
+impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
+    FastFifoInner<Tag, Inner /*A*/>
 {
-    #[cfg_attr(feature = "debug", instrument(skip(alloc)))]
-    pub fn new_in(num_blocks: usize, block_size: usize, alloc: A) -> Self {
+    #[cfg_attr(feature = "debug", instrument/*(skip(alloc))*/)]
+    pub fn new_in(num_blocks: usize, block_size: usize /*alloc: A*/) -> Self {
         Self {
             heads: unsafe {
                 NonNull::new_unchecked(
-                    Box::into_raw_with_allocator({
-                        let mut vec = Vec::new_in(&alloc);
+                    Box::into_raw({
+                        let mut vec = Vec::new(); //Vec::new_in(&alloc);
                         vec.reserve(Tag::num_transformations());
 
                         vec.extend((0..Tag::num_transformations()).map(|i| {
@@ -53,56 +56,52 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default, A: Allocator>
                             #[cfg(feature = "debug")]
                             info!("Head[{i}] = {field:?}");
 
-                            NonNull::new_unchecked(
-                                Box::into_raw_with_allocator(if tag.is_atomic() {
-                                    Box::new_in(AtomicHead::from(field), &alloc)
-                                        as Box<dyn Atomic, _>
-                                } else {
-                                    Box::new_in(NonAtomicHead::from(field), &alloc)
-                                })
-                                .0,
-                            )
+                            NonNull::new_unchecked(Box::into_raw(if tag.is_atomic() {
+                                Box::new(AtomicHead::from(field))//, &alloc)
+                                        as Box<dyn Atomic, /*_*/>
+                            } else {
+                                Box::new(NonAtomicHead::from(field)) //, &alloc)
+                            }))
                         }));
 
                         vec.into_boxed_slice()
                     })
-                    .0,
+
                 )
             },
             blocks: unsafe {
-                NonNull::new_unchecked(
-                    Box::into_raw_with_allocator({
-                        let mut vec = Vec::new_in(&alloc);
-                        vec.reserve(num_blocks);
+                NonNull::new_unchecked(Box::into_raw({
+                    let mut vec = Vec::new(); // (&alloc);
+                    vec.reserve(num_blocks);
 
-                        vec.extend((0..num_blocks).map(|i| {
-                            #[cfg(feature = "debug")]
-                            info!("Init block {i}");
-                            let _ = i;
+                    vec.extend((0..num_blocks).map(|i| {
+                        #[cfg(feature = "debug")]
+                        info!("Init block {i}");
+                        let _ = i;
 
-                            Block::new_in(block_size, &alloc)
-                        }));
+                        Block::new_in(block_size) // , &alloc)
+                    }));
 
-                        vec.into_boxed_slice()
-                    })
-                    .0,
-                )
+                    vec.into_boxed_slice()
+                }))
             },
             num_blocks,
             block_size,
-            alloc,
+            // alloc,
         }
     }
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInner<Tag, Inner, A> {
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
+    FastFifoInner<Tag, Inner /*A*/>
+{
     fn get_head(&self, tag: Tag) -> &dyn Atomic {
         // Safety: this pointer can be turned into a reference because I said so.
         unsafe { self.heads.as_ref().get(tag.into()).unwrap().as_ref() }
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
-    fn get_block(&self, tag: Tag) -> (Field, &Block<Tag, Inner, A>) {
+    fn get_block(&self, tag: Tag) -> (Field, &Block<Tag, Inner /*A*/>) {
         let head = self.get_head(tag).load();
         #[cfg(feature = "debug")]
         info!(?head);
@@ -189,7 +188,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self)))]
-    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner, A>> {
+    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner /*A*/>> {
         //         v [2].give (1)
         //         |         v [2].take (2)
         //         |         |           v [1].give (3)
@@ -230,8 +229,8 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> FastFifoInne
     }
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop
-    for FastFifoInner<Tag, Inner, A>
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/> Drop
+    for FastFifoInner<Tag, Inner /*A*/>
 {
     fn drop(&mut self) {
         let Self {
@@ -239,16 +238,16 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Drop
             blocks,
             num_blocks,
             block_size,
-            alloc,
+            // alloc,
         } = self;
 
         let _ = num_blocks;
         let _ = block_size;
 
         unsafe {
-            drop(Box::from_raw_in(heads.as_ptr(), &*alloc));
-            let mut b = Box::from_raw_in(blocks.as_ptr(), &*alloc);
-            b.iter_mut().for_each(|block| block.drop_in(&*alloc));
+            drop(Box::from_raw(heads.as_ptr())); // , &*alloc));
+            let mut b = Box::from_raw(blocks.as_ptr()); // , &*alloc);
+            b.iter_mut().for_each(|block| block.drop_in()); // &*alloc));
             drop(b);
         }
     }

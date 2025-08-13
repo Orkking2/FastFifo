@@ -7,32 +7,32 @@ use crate::{
     entry_descriptor::EntryDescriptor,
     field::Field,
 };
-use std::{alloc::Allocator, marker::PhantomData, ptr::NonNull};
+use std::{/*alloc::Allocator,*/ marker::PhantomData, ptr::NonNull};
 
 #[repr(C)]
-pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
-    _phantom: PhantomData<(Tag, A)>,
+pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> {
+    _phantom: PhantomData<(Tag, /*A*/)>,
     atomics: NonNull<[AtomicPair]>,
     entries: NonNull<[Inner]>,
     block_size: usize,
 }
 
-pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> {
-    Success(EntryDescriptor<'a, Tag, Inner, A>),
+pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> {
+    Success(EntryDescriptor<'a, Tag, Inner, /*A*/>),
     NotAvailable,
     BlockDone,
     Busy,
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, Inner, A> {
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Block<Tag, Inner, /*A*/> {
     #[cfg_attr(feature = "debug", instrument(skip(block_size, alloc)))]
-    pub fn new_in(block_size: usize, alloc: &A) -> Self {
+    pub fn new_in(block_size: usize, /*alloc: &A*/) -> Self {
         Self {
             _phantom: PhantomData,
             atomics: unsafe {
                 NonNull::new_unchecked(
-                    Box::into_raw_with_allocator({
-                        let mut vec = Vec::new_in(alloc);
+                    Box::into_raw({
+                        let mut vec = Vec::new();// (alloc);
                         vec.reserve(Tag::num_transformations());
 
                         vec.extend((0..Tag::num_transformations()).map(|i| {
@@ -47,18 +47,18 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
 
                         vec.into_boxed_slice()
                     })
-                    .0,
+                    // .0,
                 )
             },
             entries: unsafe {
                 NonNull::new_unchecked(
-                    Box::into_raw_with_allocator({
-                        let mut vec = Vec::new_in(alloc);
+                    Box::into_raw({
+                        let mut vec = Vec::new(); // (alloc);
                         vec.resize_with(block_size, Inner::default);
 
                         vec.into_boxed_slice()
                     })
-                    .0,
+                    // .0,
                 )
             },
             block_size,
@@ -74,7 +74,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
-    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, A> {
+    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, /*A*/> {
         let (current, chasing) = self.get_current_chasing(tag);
         let producer_offset = if tag == Tag::producer() { 1 } else { 0 };
 
@@ -140,7 +140,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
         unsafe { &self.entries.as_ref()[index] as *const Inner as *mut Inner }
     }
 
-    pub fn drop_in(&mut self, alloc: &A) {
+    pub fn drop_in(&mut self, /*alloc: &A*/) {
         let x = (0..Tag::num_transformations())
             .map(|i| {
                 let atomic_pair = unsafe { &self.atomics.as_ref()[i] };
@@ -186,8 +186,8 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, A: Allocator> Block<Tag, I
 
         // Now we free the memory used by this block.
         unsafe {
-            drop(Box::from_raw_in(self.atomics.as_ptr(), alloc));
-            drop(Box::from_raw_in(self.entries.as_ptr(), alloc));
+            drop(Box::from_raw(self.atomics.as_ptr()));// , alloc));
+            drop(Box::from_raw(self.entries.as_ptr()));// , alloc));
         }
     }
 }
