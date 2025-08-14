@@ -9,7 +9,6 @@ mod atomic;
 mod block;
 mod entries;
 mod error;
-mod field;
 mod fifo;
 #[cfg(test)]
 mod test;
@@ -17,8 +16,8 @@ mod test;
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone)]
-pub struct FastFifo<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
-    Arc<FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE>>,
+pub struct FastFifo<T>(
+    Arc<FastFifoInner<T>>,
 );
 
 /// This type allows for the construction of a FastFifo from a CAPACITY instead of a NUM_BLOCKS.
@@ -28,23 +27,19 @@ pub struct FastFifo<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize>(
 //     lhs / rhs + if lhs % rhs != 0 { 1 } else { 0 }
 // }
 
-// impl<T, const CAPACITY: usize, const BLOCK_SIZE: usize> CohortFastFifo<T, CAPACITY, BLOCK_SIZE> {
+// impl<T, const CAPACITY: usize, const BLOCK_SIZE: usize> CohortFastFifo<T, CAPACITY> {
 //     /// At least enough blocks to get CAPACITY size
-//     pub fn new() -> FastFifo<T, { ceiling_div(CAPACITY, BLOCK_SIZE) }, BLOCK_SIZE> {
+//     pub fn new() -> FastFifo<T, { ceiling_div(CAPACITY) }> {
 //         FastFifo::new()
 //     }
 // }
 
-impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifo<T, NUM_BLOCKS, BLOCK_SIZE> {
-    pub fn new() -> Self {
-        Self(Arc::new(FastFifoInner::new()))
+impl<T> FastFifo<T> {
+    pub fn new(num_blocks: usize, block_size: usize) -> Self {
+        Self(Arc::new(FastFifoInner::new(num_blocks, block_size)))
     }
 
-    pub const fn capacity() -> usize {
-        FastFifoInner::<T, NUM_BLOCKS, BLOCK_SIZE>::capacity()
-    }
-
-    pub fn try_get_producer_entry(&self) -> Result<ProducingEntry<'_, T, BLOCK_SIZE>> {
+    pub fn try_get_producer_entry(&self) -> Result<ProducingEntry<'_, T>> {
         self.0.get_producer_entry()
     }
 
@@ -56,7 +51,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifo<T, NUM_BLOCKS
         self.0.push(val)
     }
 
-    pub fn try_get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T, BLOCK_SIZE>> {
+    pub fn try_get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T>> {
         self.0.get_consumer_entry()
     }
 
@@ -69,16 +64,8 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifo<T, NUM_BLOCKS
     }
 }
 
-impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Default
-    for FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T: Debug, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Debug
-    for FastFifo<T, NUM_BLOCKS, BLOCK_SIZE>
+impl<T: Debug> Debug
+    for FastFifo<T>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.0.as_ref())

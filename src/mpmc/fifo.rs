@@ -1,15 +1,16 @@
+use crate::field::{Field, FieldConfig};
+
 use super::{
     Error, Result,
     atomic::AtomicField,
     block::{AllocState, Block, ReserveState},
     entries::{ConsumingEntry, ProducingEntry},
-    field::{Field, FieldConfig},
 };
-use std::{array, fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
+use std::{fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
 
 /*
 ! New
-Fifo::<Val_t, NUM_BLOCKS: 2, BLOCK_SIZE: 5>::new():
+Fifo::<Val_t, NUM_BLOCKS: 2: 5>::new():
 
 ? State
 pField -> a
@@ -101,16 +102,18 @@ v Reserved (0)
 
 */
 
-pub(crate) struct FastFifoInner<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> {
-    phead: AtomicField<NUM_BLOCKS>,
-    chead: AtomicField<NUM_BLOCKS>,
-    blocks: [Block<T, BLOCK_SIZE>; NUM_BLOCKS],
+pub(crate) struct FastFifoInner<T> {
+    phead: AtomicField,
+    chead: AtomicField,
+    num_blocks: usize,
+    block_size: usize,
+    blocks: *mut [Block<T>],
 }
 
 #[rustfmt::skip]
-unsafe impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Send for FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE> {}
+unsafe impl<T> Send for FastFifoInner<T> {}
 #[rustfmt::skip]
-unsafe impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Sync for FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE> {}
+unsafe impl<T> Sync for FastFifoInner<T> {}
 
 enum AdvancePheadState {
     Success,
@@ -118,65 +121,82 @@ enum AdvancePheadState {
     NotAvailable,
 }
 
-impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE> {
-    pub fn new() -> Self {
+impl<T> FastFifoInner<T> {
+    pub fn new(num_blocks: usize, block_size: usize) -> Self {
         // There might be a better way to do this, since this is only a runtime check, but we can check NUM_BLOCKS at compile time.
         assert!(
-            NUM_BLOCKS > 1,
+            num_blocks > 1,
             "If you want only one block, use a different Fifo."
         );
 
         Self {
-            phead: Default::default(),
+            phead: AtomicField::new(FieldConfig {
+                index_max: num_blocks,
+                version: 0,
+                index: 0,
+            }),
             chead: AtomicField::new(FieldConfig {
-                ..Default::default()
+                index_max: num_blocks,
+                version: 0,
+                index: 0,
             }),
-            blocks: array::from_fn(|i| {
-                if i == 0 {
-                    Default::default()
-                } else {
-                    // {.idx = BLOCK_SIZE}
-                    Block {
-                        allocated: AtomicField::new(FieldConfig {
-                            index: BLOCK_SIZE,
-                            ..Default::default()
-                        }),
-                        committed: AtomicField::new(FieldConfig {
-                            index: BLOCK_SIZE,
-                            ..Default::default()
-                        }),
-                        reserved: AtomicField::new(FieldConfig {
-                            // index: BLOCK_SIZE,
-                            ..Default::default()
-                        }),
-                        consumed: AtomicField::new(FieldConfig {
-                            index: BLOCK_SIZE,
-                            ..Default::default()
-                        }),
-
-                        ..Default::default()
+            blocks: Box::into_raw({
+                let mut vec = Vec::with_capacity(num_blocks);
+                vec.extend((0..num_blocks).map(|i| {
+                    if i == 0 {
+                        Block::new(block_size)
+                    } else {
+                        Block::new_full(block_size)
                     }
-                }
+                }));
+                vec.into_boxed_slice()
             }),
+
+            // array::from_fn(|i| {
+            //     if i == 0 {
+            //         Default::default()
+            //     } else {
+            //         // {.idx = BLOCK_SIZE}
+            //         Block {
+            //             allocated: AtomicField::new(FieldConfig {
+            //                 index: BLOCK_SIZE,
+            //                 ..Default::default()
+            //             }),
+            //             committed: AtomicField::new(FieldConfig {
+            //                 index: BLOCK_SIZE,
+            //                 ..Default::default()
+            //             }),
+            //             reserved: AtomicField::new(FieldConfig {
+            //                 // index: BLOCK_SIZE,
+            //                 ..Default::default()
+            //             }),
+            //             consumed: AtomicField::new(FieldConfig {
+            //                 index: BLOCK_SIZE,
+            //                 ..Default::default()
+            //             }),
+
+            //             ..Default::default()
+            //         }
+            //     }
+            // }),
+            num_blocks,
+            block_size,
         }
     }
 
-    pub const fn capacity() -> usize {
-        NUM_BLOCKS * BLOCK_SIZE
-    }
-
-    fn get_phead_and_block(&self) -> (Field<NUM_BLOCKS>, &Block<T, BLOCK_SIZE>) {
+    fn get_phead_and_block(&self) -> (Field, &Block<T>) {
         let ph = self.phead.load(Ordering::Relaxed);
-        (ph, &self.blocks[ph.get_index()])
+        (ph, &unsafe { &*self.blocks }[ph.get_index()])
     }
 
-    fn advance_phead(&self, ph: Field<NUM_BLOCKS>) -> AdvancePheadState {
-        let ref nblk = self.blocks[(ph.get_index() + 1) % NUM_BLOCKS];
+    fn advance_phead(&self, ph: Field) -> AdvancePheadState {
+        let ref nblk = unsafe { &*self.blocks }[(ph.get_index() + 1) % self.num_blocks];
         // /* retry-new begin
         let consumed = nblk.consumed.load(Ordering::Acquire);
 
         if consumed.get_version() < ph.get_version()
-            || (consumed.get_version() == ph.get_version() && consumed.get_index() != BLOCK_SIZE)
+            || (consumed.get_version() == ph.get_version()
+                && consumed.get_index() != self.block_size)
         {
             let reserved = nblk.reserved.load(Ordering::Relaxed);
 
@@ -195,8 +215,9 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
         // */ // drop-old end
         else {
             let new_field = FieldConfig {
+                index_max: self.block_size,
                 version: ph.get_version() + 1,
-                ..Default::default()
+                index: 0,
             }
             .into();
 
@@ -210,14 +231,14 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
         }
     }
 
-    fn get_chead_and_block(&self) -> (Field<NUM_BLOCKS>, &Block<T, BLOCK_SIZE>) {
+    fn get_chead_and_block(&self) -> (Field, &Block<T>) {
         let ch = self.chead.load(Ordering::Relaxed);
-        (ch, &self.blocks[ch.get_index()])
+        (ch, &unsafe { &*self.blocks }[ch.get_index()])
     }
 
     #[allow(unused_variables)]
-    fn advance_chead(&self, ch: Field<NUM_BLOCKS>, version: usize) -> bool {
-        let ref nblk = self.blocks[(ch.get_index() + 1) % NUM_BLOCKS];
+    fn advance_chead(&self, ch: Field, version: usize) -> bool {
+        let ref nblk = unsafe { &*self.blocks }[(ch.get_index() + 1) % self.num_blocks];
         let committed = nblk.committed.load(Ordering::Acquire);
 
         // /* retry-new begin
@@ -225,8 +246,9 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
             return false;
         }
         let new_field = FieldConfig {
+            index_max: self.block_size,
             version: ch.get_version() + 1,
-            ..Default::default()
+            index: 0,
         }
         .into();
         nblk.consumed.fetch_max(new_field, Ordering::Relaxed);
@@ -251,7 +273,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
     }
 
     /// Try to reserve a production entry
-    pub fn get_producer_entry(&self) -> Result<ProducingEntry<'_, T, BLOCK_SIZE>> {
+    pub fn get_producer_entry(&self) -> Result<ProducingEntry<'_, T>> {
         loop {
             let (ph, blk) = self.get_phead_and_block();
             match blk.allocate_entry() {
@@ -277,7 +299,7 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
         self.push_in_place(|ptr| unsafe { ptr.write(val) })
     }
 
-    pub fn get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T, BLOCK_SIZE>> {
+    pub fn get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T>> {
         loop {
             let (ch, blk) = self.get_chead_and_block();
             match blk.reserve_entry() {
@@ -313,18 +335,16 @@ impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> FastFifoInner<T, NUM_B
     }
 }
 
-impl<T: Debug, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Debug
-    for FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE>
-{
+impl<T: Debug> Debug for FastFifoInner<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(&self.blocks).finish()
+        f.debug_list().entries(unsafe { &*self.blocks }).finish()
     }
 }
 
-impl<T, const NUM_BLOCKS: usize, const BLOCK_SIZE: usize> Drop
-    for FastFifoInner<T, NUM_BLOCKS, BLOCK_SIZE>
-{
+impl<T> Drop for FastFifoInner<T> {
     fn drop(&mut self) {
-        self.blocks.iter_mut().for_each(Block::drop);
+        unsafe { &mut *self.blocks }
+            .iter_mut()
+            .for_each(Block::drop);
     }
 }
