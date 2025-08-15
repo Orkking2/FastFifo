@@ -12,7 +12,7 @@ clap = { version = "4.5.41", features = ["derive"], optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 tracing-log = { version = "0.2", optional = true }
-tracing-appender = { version = "0.2", optional = true}
+tracing-appender = { version = "0.2", optional = true }
 
 [features]
 debug = ["tracing"]
@@ -27,4 +27,15 @@ required-features = ["cli"]
 name = "variadic_perf"
 required-features = ["cli"]
 
+[[bin]]
+name = "paella_1_buffer_dyn"
+required-features = ["cli"]
+
 [dev-dependencies]
+rand = "0.9.2"
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

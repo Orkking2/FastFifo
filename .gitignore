@@ -3,6 +3,4 @@
 debug/
 target/
 .vscode/
-
-# For debugging
-*.log
+logs/

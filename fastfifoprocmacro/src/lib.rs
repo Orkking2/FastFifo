@@ -231,7 +231,7 @@ pub(crate) fn do_generate_union(
     let entry_descriptor = quote! { #fifo_path ::entry_descriptor::EntryDescriptor };
     let manually_drop = quote! { ::core::mem::ManuallyDrop };
     let result = quote! { #fifo_path ::Result };
-    let std_alloc = quote! { ::std::alloc };
+    // let std_alloc = quote! { ::std::alloc };
 
     let (impl_generic, ty_generic, where_clause) = generics.split_for_impl();
 
@@ -272,7 +272,7 @@ pub(crate) fn do_generate_union(
         })
         .collect::<(Vec<_>, Vec<_>)>();
 
-    let mut alloc_generics = generics.clone();
+    let alloc_generics = generics.clone();
 
     // alloc_generics
     //     .params
@@ -280,7 +280,7 @@ pub(crate) fn do_generate_union(
 
     let (alloc_impl_generic, alloc_ty_generic, _) = alloc_generics.split_for_impl();
 
-    let mut default_alloc_generics = generics.clone();
+    let default_alloc_generics = generics.clone();
 
     // default_alloc_generics
     //     .params

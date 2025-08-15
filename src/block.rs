@@ -7,66 +7,65 @@ use crate::{
     entry_descriptor::EntryDescriptor,
     field::Field,
 };
-use std::{/*alloc::Allocator,*/ marker::PhantomData, ptr::NonNull};
+use std::{/*alloc::Allocator,*/ marker::PhantomData};
+
+#[cfg(loom)]
+use loom::cell::{MutPtr, UnsafeCell};
+
+#[cfg(not(loom))]
+use std::cell::UnsafeCell;
 
 #[repr(C)]
-pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> {
-    _phantom: PhantomData<(Tag, /*A*/)>,
-    atomics: NonNull<[AtomicPair]>,
-    entries: NonNull<[Inner]>,
+pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> {
+    _phantom: PhantomData<(Tag /*A*/,)>,
+    atomics: Box<[AtomicPair]>,
+    entries: Box<[UnsafeCell<Inner>]>,
     block_size: usize,
 }
 
-pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> {
-    Success(EntryDescriptor<'a, Tag, Inner, /*A*/>),
+pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> {
+    Success(EntryDescriptor<'a, Tag, Inner /*A*/>),
     NotAvailable,
     BlockDone,
     Busy,
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Block<Tag, Inner, /*A*/> {
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> Block<Tag, Inner /*A*/> {
     #[cfg_attr(feature = "debug", instrument(skip(block_size, /*alloc*/)))]
-    pub fn new_in(block_size: usize, /*alloc: &A*/) -> Self {
+    pub fn new_in(block_size: usize /*alloc: &A*/) -> Self
+    where
+        Inner: Default,
+    {
         Self {
             _phantom: PhantomData,
-            atomics: unsafe {
-                NonNull::new_unchecked(
-                    Box::into_raw({
-                        let mut vec = Vec::new();// (alloc);
-                        vec.reserve(Tag::num_transformations());
+            atomics: {
+                let mut vec = Vec::new(); // (alloc);
+                vec.reserve(Tag::num_transformations());
 
-                        vec.extend((0..Tag::num_transformations()).map(|i| {
-                            let field = Field::from_parts(block_size, 0, 0);
+                vec.extend((0..Tag::num_transformations()).map(|i| {
+                    let field = Field::from_parts(block_size, 0, 0);
 
-                            #[cfg(feature = "debug")]
-                            info!("Atomics[{i}] = {field:?}");
-                            let _ = i;
+                    #[cfg(feature = "debug")]
+                    info!("Atomics[{i}] = {field:?}");
+                    let _ = i;
 
-                            AtomicPair::from(field)
-                        }));
+                    AtomicPair::from(field)
+                }));
 
-                        vec.into_boxed_slice()
-                    })
-                    // .0,
-                )
+                vec.into_boxed_slice()
             },
-            entries: unsafe {
-                NonNull::new_unchecked(
-                    Box::into_raw({
-                        let mut vec = Vec::new(); // (alloc);
-                        vec.resize_with(block_size, Inner::default);
+            entries: {
+                let mut vec = Vec::new(); // (alloc);
+                vec.resize_with(block_size, || UnsafeCell::new(Inner::default()));
 
-                        vec.into_boxed_slice()
-                    })
-                    // .0,
-                )
+                vec.into_boxed_slice()
             },
             block_size,
         }
     }
 
     pub fn get_atomics(&self, tag: Tag) -> &AtomicPair {
-        unsafe { &self.atomics.as_ref()[tag.into()] }
+        &self.atomics.as_ref()[tag.into()]
     }
 
     pub fn get_current_chasing(&self, tag: Tag) -> (&AtomicPair, &AtomicPair) {
@@ -74,7 +73,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Block<Ta
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
-    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner, /*A*/> {
+    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner /*A*/> {
         let (current, chasing) = self.get_current_chasing(tag);
         let producer_offset = if tag == Tag::producer() { 1 } else { 0 };
 
@@ -134,16 +133,20 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Block<Ta
         }
     }
 
-    /// # Safety
-    /// This must be the only concurrent access of self.entries[index]
-    pub unsafe fn get_ptr(&self, index: usize) -> *mut Inner {
-        unsafe { &self.entries.as_ref()[index] as *const Inner as *mut Inner }
+    #[cfg(not(loom))]
+    pub fn get_ptr(&self, index: usize) -> *mut Inner {
+        self.entries.as_ref()[index].get()
     }
 
-    pub fn drop_in(&mut self, /*alloc: &A*/) {
+    #[cfg(loom)]
+    pub fn get_ptr(&self, index: usize) -> MutPtr<Inner> {
+        self.entries.as_ref()[index].get_mut()
+    }
+
+    pub fn drop_in(&mut self /*, alloc: &A*/) {
         let x = (0..Tag::num_transformations())
             .map(|i| {
-                let atomic_pair = unsafe { &self.atomics.as_ref()[i] };
+                let atomic_pair = &self.atomics.as_ref()[i];
                 let (give, take) = (atomic_pair.load_give(), atomic_pair.load_take());
 
                 if give.get_index() < take.get_index() {
@@ -171,7 +174,14 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Block<Ta
 
             if current < chasing {
                 for k in current..chasing {
-                    unsafe { self.entries.as_mut()[k].indexed_drop(i) }
+                    #[cfg(not(loom))]
+                    unsafe {
+                        self.entries.as_mut()[k].get_mut().indexed_drop(i)
+                    }
+                    #[cfg(loom)]
+                    unsafe {
+                        self.entries.as_mut()[k].get_mut().deref().indexed_drop(i)
+                    }
                 }
             }
         }
@@ -181,13 +191,20 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> Block<Ta
         //
         // Simply implementing a valid TryFrom<usize> for your UnionTag will change this behaviour to whatever you want!
         for k in (0..x[0]).chain(x[x.len() - 1]..self.entries.len()) {
-            unsafe { self.entries.as_mut()[k].indexed_drop(x.len()) }
+            #[cfg(not(loom))]
+            unsafe {
+                self.entries.as_mut()[k].get_mut().indexed_drop(k)
+            }
+            #[cfg(loom)]
+            unsafe {
+                self.entries.as_mut()[k].get_mut().deref().indexed_drop(k)
+            }
         }
+    }
+}
 
-        // Now we free the memory used by this block.
-        unsafe {
-            drop(Box::from_raw(self.atomics.as_ptr()));// , alloc));
-            drop(Box::from_raw(self.entries.as_ptr()));// , alloc));
-        }
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag>> Drop for Block<Tag, Inner> {
+    fn drop(&mut self) {
+        self.drop_in()
     }
 }

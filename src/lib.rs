@@ -28,12 +28,12 @@ mod field;
 mod fifo;
 mod head;
 
-pub struct FastFifo<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator = Global*/>(
-    Arc<FastFifoInner<Tag, Inner, /*A*/>>,
+pub struct FastFifo<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator = Global*/>(
+    Arc<FastFifoInner<Tag, Inner /*A*/>>,
 );
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default/*, A: Allocator*/> TaggedClone<Tag>
-    for FastFifo<Tag, Inner, /*A*/>
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*, A: Allocator*/> TaggedClone<Tag>
+    for FastFifo<Tag, Inner /*A*/>
 {
     fn unchecked_clone(&self) -> Self {
         Self(self.0.clone())
@@ -57,8 +57,10 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default> FastFifo<Tag, In
 //     }
 // }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/> FastFifo<Tag, Inner, /*A*/> {
-    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner, /*A*/>> {
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
+    FastFifo<Tag, Inner /*A*/>
+{
+    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner /*A*/>> {
         self.0.get_entry(tag)
     }
 }

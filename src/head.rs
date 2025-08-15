@@ -1,5 +1,13 @@
 use crate::field::Field;
+
+#[cfg(not(loom))]
 use std::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+#[cfg(loom)]
+use loom::{
     cell::UnsafeCell,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -20,15 +28,23 @@ impl From<Field> for NonAtomicHead {
 
 impl Atomic for NonAtomicHead {
     fn load(&self) -> Field {
+        #[cfg(not(loom))]
         unsafe { self.0.get().read() }
+        #[cfg(loom)]
+        unsafe { self.0.get().deref().clone() }
     }
 
     fn max(&self, rhs: Field) -> Field {
         let old = self.load();
         if rhs > old {
             // Safety: This layer was chosen to be non-atomic.
+            #[cfg(not(loom))]
             unsafe {
                 self.0.get().write(rhs);
+            }
+            #[cfg(loom)]
+            unsafe {
+                *self.0.get_mut().deref() = rhs;
             }
             old
         } else {

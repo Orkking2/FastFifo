@@ -11,15 +11,14 @@ use crate::{
     field::FieldConfig,
     head::{Atomic, AtomicHead, NonAtomicHead},
 };
-use std::{/*alloc::Allocator,*/ ptr::NonNull};
 
 pub(crate) struct FastFifoInner<
     Tag: FifoTag,
     Inner: IndexedDrop<Tag> + Default, /*A: Allocator*/
 > {
     // num_heads == Tag::num_transformations()
-    heads: NonNull<[NonNull<dyn Atomic>]>,
-    blocks: NonNull<[Block<Tag, Inner /*A*/>]>,
+    heads: Box<[Box<dyn Atomic>]>,
+    blocks: Box<[Block<Tag, Inner /*A*/>]>,
     num_blocks: usize,
     block_size: usize,
     // alloc: A,
@@ -42,48 +41,41 @@ impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
     #[cfg_attr(feature = "debug", instrument/*(skip(alloc))*/)]
     pub fn new_in(num_blocks: usize, block_size: usize /*alloc: A*/) -> Self {
         Self {
-            heads: unsafe {
-                NonNull::new_unchecked(
-                    Box::into_raw({
-                        let mut vec = Vec::new(); //Vec::new_in(&alloc);
-                        vec.reserve(Tag::num_transformations());
+            heads: {
+                let mut vec = Vec::new(); //Vec::new_in(&alloc);
+                vec.reserve(Tag::num_transformations());
 
-                        vec.extend((0..Tag::num_transformations()).map(|i| {
-                            let tag = Tag::try_from(i).unwrap();
+                vec.extend((0..Tag::num_transformations()).map(|i| {
+                    let tag = Tag::try_from(i).unwrap();
 
-                            let field = Field::from_parts(num_blocks, 0, 0);
+                    let field = Field::from_parts(num_blocks, 0, 0);
 
-                            #[cfg(feature = "debug")]
-                            info!("Head[{i}] = {field:?}");
+                    #[cfg(feature = "debug")]
+                    info!("Head[{i}] = {field:?}");
 
-                            NonNull::new_unchecked(Box::into_raw(if tag.is_atomic() {
-                                Box::new(AtomicHead::from(field))//, &alloc)
+                    if tag.is_atomic() {
+                        Box::new(AtomicHead::from(field))//, &alloc)
                                         as Box<dyn Atomic, /*_*/>
-                            } else {
-                                Box::new(NonAtomicHead::from(field)) //, &alloc)
-                            }))
-                        }));
+                    } else {
+                        Box::new(NonAtomicHead::from(field)) //, &alloc)
+                    }
+                }));
 
-                        vec.into_boxed_slice()
-                    })
-
-                )
+                vec.into_boxed_slice()
             },
-            blocks: unsafe {
-                NonNull::new_unchecked(Box::into_raw({
-                    let mut vec = Vec::new(); // (&alloc);
-                    vec.reserve(num_blocks);
+            blocks: {
+                let mut vec = Vec::new(); // (&alloc);
+                vec.reserve(num_blocks);
 
-                    vec.extend((0..num_blocks).map(|i| {
-                        #[cfg(feature = "debug")]
-                        info!("Init block {i}");
-                        let _ = i;
+                vec.extend((0..num_blocks).map(|i| {
+                    #[cfg(feature = "debug")]
+                    info!("Init block {i}");
+                    let _ = i;
 
-                        Block::new_in(block_size) // , &alloc)
-                    }));
+                    Block::new_in(block_size) // , &alloc)
+                }));
 
-                    vec.into_boxed_slice()
-                }))
+                vec.into_boxed_slice()
             },
             num_blocks,
             block_size,
@@ -97,7 +89,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
 {
     fn get_head(&self, tag: Tag) -> &dyn Atomic {
         // Safety: this pointer can be turned into a reference because I said so.
-        unsafe { self.heads.as_ref().get(tag.into()).unwrap().as_ref() }
+        self.heads.as_ref().get(tag.into()).unwrap().as_ref()
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
@@ -106,14 +98,54 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
         #[cfg(feature = "debug")]
         info!(?head);
 
-        unsafe { (head.clone(), &self.blocks.as_ref()[head.get_index()]) }
+        (head.clone(), &self.blocks.as_ref()[head.get_index()])
+    }
+
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
+    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner /*A*/>> {
+        //         v [2].give (1)
+        //         |         v [2].take (2)
+        //         |         |           v [1].give (3)
+        //         |         |           |            v [1].take (4)
+        //         |         |           |            |          v [0].give (5)
+        //         |         |           |            |          |          v [0].take (6)
+        // [Uninit, Reserved, Post_Trans, Trans_Alloc, Pre_Trans, Allocated, Uninit] ->
+
+        loop {
+            let (head, block) = self.get_block(tag);
+
+            match block.reserve_in_layer(tag) {
+                ReserveState::Success(entry_descriptor) => {
+                    #[cfg(feature = "debug")]
+                    info!(
+                        "Success, block[{}][{}]",
+                        head.get_index(),
+                        entry_descriptor.index,
+                    );
+                    break Ok(entry_descriptor);
+                }
+                ReserveState::NotAvailable => {
+                    break Err(Error::NotAvailable);
+                }
+                ReserveState::Busy => {
+                    break Err(Error::Busy);
+                }
+                ReserveState::BlockDone => match self.advance_head(head, tag) {
+                    AdvanceHeadStatus::Busy => {
+                        break Err(Error::Busy);
+                    }
+                    AdvanceHeadStatus::Success => {
+                        continue;
+                    }
+                },
+            }
+        }
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
     fn advance_head(&self, head: Field, tag: Tag) -> AdvanceHeadStatus {
-        let (next_current, next_chasing) = unsafe {
-            self.blocks.as_ref()[(head.get_index() + 1) % self.num_blocks].get_current_chasing(tag)
-        };
+        let (next_current, next_chasing) =
+            self.blocks.as_ref()[(head.get_index() + 1) % self.num_blocks].get_current_chasing(tag);
 
         let chasing_give = next_chasing.load_give();
 
@@ -159,7 +191,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
 
             let new_next_current = Field::from(FieldConfig {
                 index_max: self.block_size,
-                version: head.get_version() + /* Only inc vsn if idx needs to be reset */ if next_current_give.get_index() != 0 { 1 } else { 0 },
+                version: head.get_version() + /* Only inc vsn if idx needs to be reset */ if next_current_give.get_index() >= next_current_give.get_index_max() { 1 } else { 0 },
                 index: 0,
             });
             #[cfg(feature = "debug")]
@@ -186,69 +218,21 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/>
             AdvanceHeadStatus::Busy
         }
     }
-
-    #[cfg_attr(feature = "debug", instrument(skip(self)))]
-    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner /*A*/>> {
-        //         v [2].give (1)
-        //         |         v [2].take (2)
-        //         |         |           v [1].give (3)
-        //         |         |           |            v [1].take (4)
-        //         |         |           |            |          v [0].give (5)
-        //         |         |           |            |          |          v [0].take (6)
-        // [Uninit, Reserved, Post_Trans, Trans_Alloc, Pre_Trans, Allocated, Uninit] ->
-
-        loop {
-            let (head, block) = self.get_block(tag);
-
-            match block.reserve_in_layer(tag) {
-                ReserveState::Success(entry_descriptor) => {
-                    #[cfg(feature = "debug")]
-                    info!(
-                        "Success, block[{}][{}]",
-                        head.get_index(),
-                        entry_descriptor.index,
-                    );
-                    break Ok(entry_descriptor);
-                }
-                ReserveState::NotAvailable => {
-                    break Err(Error::NotAvailable);
-                }
-                ReserveState::Busy => {
-                    break Err(Error::Busy);
-                }
-                ReserveState::BlockDone => match self.advance_head(head, tag) {
-                    AdvanceHeadStatus::Busy => {
-                        break Err(Error::Busy);
-                    }
-                    AdvanceHeadStatus::Success => {
-                        continue;
-                    }
-                },
-            }
-        }
-    }
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/> Drop
-    for FastFifoInner<Tag, Inner /*A*/>
-{
-    fn drop(&mut self) {
-        let Self {
-            heads,
-            blocks,
-            num_blocks,
-            block_size,
-            // alloc,
-        } = self;
+// impl<Tag: FifoTag, Inner: IndexedDrop<Tag> + Default /*A: Allocator*/> Drop
+//     for FastFifoInner<Tag, Inner /*A*/>
+// {
+//     fn drop(&mut self) {
+//         let Self {
+//             heads,
+//             blocks,
+//             num_blocks,
+//             block_size,
+//             // alloc,
+//         } = self;
 
-        let _ = num_blocks;
-        let _ = block_size;
-
-        unsafe {
-            drop(Box::from_raw(heads.as_ptr())); // , &*alloc));
-            let mut b = Box::from_raw(blocks.as_ptr()); // , &*alloc);
-            b.iter_mut().for_each(|block| block.drop_in()); // &*alloc));
-            drop(b);
-        }
-    }
-}
+//         let _ = num_blocks;
+//         let _ = block_size;
+//     }
+// }

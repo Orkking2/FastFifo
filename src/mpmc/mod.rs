@@ -16,9 +16,7 @@ mod test;
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone)]
-pub struct FastFifo<T>(
-    Arc<FastFifoInner<T>>,
-);
+pub struct FastFifo<T>(Arc<FastFifoInner<T>>);
 
 /// This type allows for the construction of a FastFifo from a CAPACITY instead of a NUM_BLOCKS.
 // pub struct CohortFastFifo<T, const CAPACITY: usize, const BLOCK_SIZE: usize>(PhantomData<T>);
@@ -64,9 +62,7 @@ impl<T> FastFifo<T> {
     }
 }
 
-impl<T: Debug> Debug
-    for FastFifo<T>
-{
+impl<T: Debug> Debug for FastFifo<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.0.as_ref())
     }

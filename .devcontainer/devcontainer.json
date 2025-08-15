@@ -1,0 +1,5 @@
+{
+	"name": "fastfifo",
+	"image": "mcr.microsoft.com/devcontainers/rust:latest",
+	"postCreateCommand": "sudo apt -y update && sudo apt -y upgrade && sudo apt -y install linux-perf && rustup install nightly && rustup default nightly"
+}

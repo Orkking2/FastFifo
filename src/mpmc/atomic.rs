@@ -28,7 +28,10 @@ impl AtomicField {
     }
 
     pub fn fetch_max(&self, val: Field, order: Ordering) -> Field {
-        Field::from_raw_parts(self.index_max, self.inner.fetch_max(val.get_raw_inner(), order))
+        Field::from_raw_parts(
+            self.index_max,
+            self.inner.fetch_max(val.get_raw_inner(), order),
+        )
     }
 }
 
