@@ -1,15 +1,17 @@
+use crate::mpmc::fifo_inner::FifoIndex;
+
 use self::{
     entries::{ConsumingEntry, ProducingEntry},
     error::Error,
 };
-use fifo::FastFifoInner;
+use fifo_inner::FastFifoInner;
 use std::{fmt::Debug, sync::Arc};
 
 mod atomic;
 mod block;
 mod entries;
 mod error;
-mod fifo;
+mod fifo_inner;
 #[cfg(test)]
 mod test;
 
@@ -49,6 +51,10 @@ impl<T> FastFifo<T> {
         self.0.push(val)
     }
 
+    pub fn indexed_push(&self, val: T, index: FifoIndex) {
+        self.0.indexed_push(val, index);
+    }
+
     pub fn try_get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T>> {
         self.0.get_consumer_entry()
     }
@@ -59,6 +65,10 @@ impl<T> FastFifo<T> {
 
     pub fn pop(&self) -> Result<T> {
         self.0.pop()
+    }
+
+    pub fn indexed_pop(&self) -> Result<(T, FifoIndex)> {
+        self.0.indexed_pop()
     }
 }
 

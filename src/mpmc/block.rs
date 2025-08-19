@@ -1,4 +1,4 @@
-use crate::field::FieldConfig;
+use crate::{field::FieldConfig, mpmc::fifo_inner::FifoIndex};
 
 use super::{atomic::AtomicField, entries::EntryDescription};
 use std::{fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
@@ -87,7 +87,7 @@ impl<T> Block<T> {
         }
     }
 
-    pub fn allocate_entry(&self) -> AllocState<'_, T> {
+    pub fn allocate_entry(&self, block_idx: usize) -> AllocState<'_, T> {
         if self.allocated.load(Ordering::Relaxed).get_index() >= self.block_size {
             AllocState::BlockDone
         } else {
@@ -98,7 +98,10 @@ impl<T> Block<T> {
             } else {
                 AllocState::Allocated(EntryDescription {
                     block: &self,
-                    index: old,
+                    index: FifoIndex {
+                        block_idx,
+                        sub_block_idx: old,
+                    },
                     version: 0,
                 })
             }
@@ -129,7 +132,10 @@ impl<T> Block<T> {
                 {
                     break ReserveState::Reserved(EntryDescription {
                         block: &self,
-                        index: reserved.get_index(),
+                        index: FifoIndex {
+                            block_idx: 0,
+                            sub_block_idx: reserved.get_index(),
+                        },
                         version: reserved.get_version(),
                     });
                 }

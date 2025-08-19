@@ -1,106 +1,11 @@
-use crate::field::{Field, FieldConfig};
-
 use super::{
     Error, Result,
     atomic::AtomicField,
     block::{AllocState, Block, ReserveState},
     entries::{ConsumingEntry, ProducingEntry},
 };
+use crate::field::{Field, FieldConfig};
 use std::{fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
-
-/*
-! New
-Fifo::<Val_t, NUM_BLOCKS: 2: 5>::new():
-
-? State
-pField -> a
-cField -> a
-blocks: [a, b]
-
-Block::new():
-v Consumed (0)
-v Reserved (0)
-v Committed (0)
-v Allocated (0)
-[Uninit, Uninit, Uninit, Uninit, Uninit]
-
-!Process of Fifo::push(val)
-
-? Allocate an entry
-block[a]:
-v Consumed (0)
-v Reserved (0)
-v Committed (0)
-|          v Allocated (1)
-[Allocated, Uninit, Uninit, Uninit, Uninit]
-
-? Write val into the allocated slot
-block[a]:
-v Consumed (0)
-v Reserved (0)
-|    v Committed (1)
-|    v Allocated (1)
-[val, Uninit, Uninit, Uninit, Uninit]
-
-! Process of Fifo::pop()
-
-? State
-Fifo:
-pField -> a
-cField -> a
-blocks: [a, b, c, d]
-
-block[a]:
-v Consumed (0)
-v Reserved (0)
-|    v Committed (1)
-|    v Allocated (1)
-[val, Uninit, Uninit, Uninit, Uninit]
-
-? Reserve a slot
-block[a]:
-v Consumed (0)
-|         v Reserved (1)
-|         v Committed (1)
-|         v Allocated (1)
-[Reserved, Uninit, Uninit, Uninit, Uninit]
-
-? Consume the slot
-block[a]:
-        v Consumed (1)
-        v Reserved (1)
-        v Committed (1)
-        v Allocated (1)
-[Uninit, Uninit, Uninit, Uninit, Uninit]
-
-! Complex interaction 1: advancing cField with pop
-
-? State
-Fifo:
-pField -> b
-cField -> a
-blocks: [a, b]
-
-block[a]: (empty)
-                                   v Consumed (5)
-                                   v Reserved (5)
-                                   v Committed (5)
-                                   v Allocated (5)
-[Uninit, Reserved, Val1, Val2, Val3]
-
-block[b]: (half-empty)
-v Consumed (0)
-v Reserved (0)
-|           v Committed (2)
-|           |          v Allocated (3)
-[Val4, Val5, Allocated, Uninit, Uninit]
-
-? Attempt to reserve a slot
-? See that block[cField (a)].reserved == BLOCK_SIZE (5)
-? advance cField
-
-
-*/
 
 pub(crate) struct FastFifoInner<T> {
     phead: AtomicField,
@@ -121,9 +26,14 @@ enum AdvancePheadState {
     NotAvailable,
 }
 
+#[derive(Clone, Copy)]
+pub struct FifoIndex {
+    pub block_idx: usize,
+    pub sub_block_idx: usize,
+}
+
 impl<T> FastFifoInner<T> {
     pub fn new(num_blocks: usize, block_size: usize) -> Self {
-        // There might be a better way to do this, since this is only a runtime check, but we can check NUM_BLOCKS at compile time.
         assert!(
             num_blocks > 1,
             "If you want only one block, use a different Fifo."
@@ -276,7 +186,7 @@ impl<T> FastFifoInner<T> {
     pub fn get_producer_entry(&self) -> Result<ProducingEntry<'_, T>> {
         loop {
             let (ph, blk) = self.get_phead_and_block();
-            match blk.allocate_entry() {
+            match blk.allocate_entry(ph.get_index()) {
                 AllocState::Allocated(entry_description) => {
                     break Ok(ProducingEntry(entry_description));
                 }
@@ -297,6 +207,13 @@ impl<T> FastFifoInner<T> {
 
     pub fn push(&self, val: T) -> Result<()> {
         self.push_in_place(|ptr| unsafe { ptr.write(val) })
+    }
+
+    pub fn indexed_push(&self, val: T, index: FifoIndex) {
+        let blk = unsafe { &(*self.blocks)[index.block_idx] };
+        blk.allocated.fetch_add(1, Ordering::Relaxed);
+        unsafe { (*blk.entries)[index.sub_block_idx].write(val) };
+        blk.committed.fetch_add(1, Ordering::Release);
     }
 
     pub fn get_consumer_entry(&self) -> Result<ConsumingEntry<'_, T>> {
@@ -332,6 +249,20 @@ impl<T> FastFifoInner<T> {
             uninit_mem.write(unsafe { ptr.read() });
         })
         .map(|()| unsafe { uninit_mem.assume_init() })
+    }
+
+    pub fn indexed_pop(&self) -> Result<(T, FifoIndex)> {
+        let mut val = MaybeUninit::uninit();
+        let mut idx = MaybeUninit::uninit();
+
+        self.get_consumer_entry()
+            .map(|mut entry| {
+                entry.consume_t_in_place(|ptr| {
+                    val.write(unsafe { ptr.read() });
+                });
+                idx.write(entry.0.index);
+            })
+            .map(|()| unsafe { (val.assume_init(), idx.assume_init()) })
     }
 }
 

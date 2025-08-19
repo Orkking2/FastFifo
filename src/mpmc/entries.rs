@@ -1,3 +1,5 @@
+use crate::mpmc::fifo_inner::FifoIndex;
+
 use super::block::Block;
 use std::sync::atomic::Ordering;
 
@@ -35,7 +37,7 @@ impl<'a, T> Drop for ConsumingEntry<'a, T> {
 
 pub(crate) struct EntryDescription<'a, T> {
     pub(crate) block: &'a Block<T>,
-    pub(crate) index: usize,
+    pub(crate) index: FifoIndex,
     #[allow(dead_code)]
     pub(crate) version: usize,
 }
@@ -43,6 +45,6 @@ pub(crate) struct EntryDescription<'a, T> {
 impl<'a, T> EntryDescription<'a, T> {
     /// Modify *mut T in-place
     pub fn modify_t_in_place<F: FnOnce(*mut T)>(&mut self, modifier: F) {
-        modifier(unsafe { &*self.block.entries }[self.index].as_ptr() as *mut T)
+        modifier(unsafe { &*self.block.entries }[self.index.sub_block_idx].as_ptr() as *mut T)
     }
 }
