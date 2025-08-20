@@ -7,7 +7,7 @@ use crate::{
     entry_descriptor::EntryDescriptor,
     field::Field,
 };
-use std::{/*alloc::Allocator,*/ marker::PhantomData};
+use std::marker::PhantomData;
 
 #[cfg(loom)]
 use loom::cell::{MutPtr, UnsafeCell};
@@ -16,23 +16,23 @@ use loom::cell::{MutPtr, UnsafeCell};
 use std::cell::UnsafeCell;
 
 #[repr(C)]
-pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> {
-    _phantom: PhantomData<(Tag /*A*/,)>,
+pub struct Block<Tag: FifoTag, Inner: IndexedDrop<Tag>> {
+    _phantom: PhantomData<(Tag,)>,
     atomics: Box<[AtomicPair]>,
     entries: Box<[UnsafeCell<Inner>]>,
     block_size: usize,
 }
 
-pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> {
-    Success(EntryDescriptor<'a, Tag, Inner /*A*/>),
+pub enum ReserveState<'a, Tag: FifoTag, Inner: IndexedDrop<Tag>> {
+    Success(EntryDescriptor<'a, Tag, Inner>),
     NotAvailable,
     BlockDone,
     Busy,
 }
 
-impl<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> Block<Tag, Inner /*A*/> {
-    #[cfg_attr(feature = "debug", instrument(skip(block_size, /*alloc*/)))]
-    pub fn new_in(block_size: usize /*alloc: &A*/) -> Self
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag>> Block<Tag, Inner> {
+    #[cfg_attr(feature = "debug", instrument(skip(block_size)))]
+    pub fn new_in(block_size: usize) -> Self
     where
         Inner: Default,
     {
@@ -47,9 +47,14 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> Block<Tag, Inner /*
 
                     #[cfg(feature = "debug")]
                     info!("Atomics[{i}] = {field:?}");
-                    let _ = i;
 
                     AtomicPair::from(field)
+
+                    // if Tag::try_from(i).unwrap().is_atomic() {
+                    //     Box::new(AtomicPair::from(field)) as Box<dyn AtomPair>
+                    // } else {
+                    //     Box::new(NonAtomicPair::from(field))
+                    // }
                 }));
 
                 vec.into_boxed_slice()
@@ -73,7 +78,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> Block<Tag, Inner /*
     }
 
     #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
-    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner /*A*/> {
+    pub fn reserve_in_layer(&self, tag: Tag) -> ReserveState<'_, Tag, Inner> {
         let (current, chasing) = self.get_current_chasing(tag);
         let producer_offset = if tag == Tag::producer() { 1 } else { 0 };
 
@@ -143,7 +148,7 @@ impl<Tag: FifoTag, Inner: IndexedDrop<Tag> /*A: Allocator*/> Block<Tag, Inner /*
         self.entries.as_ref()[index].get_mut()
     }
 
-    pub fn drop_in(&mut self /*, alloc: &A*/) {
+    pub fn drop_in(&mut self) {
         let x = (0..Tag::num_transformations())
             .map(|i| {
                 let atomic_pair = &self.atomics.as_ref()[i];

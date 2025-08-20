@@ -1,13 +1,13 @@
-use crate::{field::FieldConfig, mpmc::fifo_inner::FifoIndex};
+use crate::{atom_pair::Line128, field::FieldConfig, mpmc::fifo_inner::FifoIndex};
 
 use super::{atomic::AtomicField, entries::EntryDescription};
 use std::{fmt::Debug, mem::MaybeUninit, sync::atomic::Ordering};
 
 pub struct Block<T> {
-    pub(crate) allocated: AtomicField,
-    pub(crate) committed: AtomicField,
-    pub(crate) reserved: AtomicField,
-    pub(crate) consumed: AtomicField,
+    pub(crate) allocated: Line128<AtomicField>,
+    pub(crate) committed: Line128<AtomicField>,
+    pub(crate) reserved: Line128<AtomicField>,
+    pub(crate) consumed: Line128<AtomicField>,
     pub(crate) block_size: usize,
     pub(crate) entries: *mut [MaybeUninit<T>],
 }
@@ -31,22 +31,22 @@ impl<T> Block<T> {
                 index_max: block_size,
                 version: 0,
                 index: 0,
-            }),
+            }).into(),
             committed: AtomicField::new(FieldConfig {
                 index_max: block_size,
                 version: 0,
                 index: 0,
-            }),
+            }).into(),
             reserved: AtomicField::new(FieldConfig {
                 index_max: block_size,
                 version: 0,
                 index: 0,
-            }),
+            }).into(),
             consumed: AtomicField::new(FieldConfig {
                 index_max: block_size,
                 version: 0,
                 index: 0,
-            }),
+            }).into(),
             entries: Box::into_raw({
                 let mut vec = Vec::with_capacity(block_size);
                 vec.extend((0..block_size).map(|_| MaybeUninit::uninit()));
@@ -62,22 +62,22 @@ impl<T> Block<T> {
                 index_max: block_size,
                 version: 0,
                 index: block_size,
-            }),
+            }).into(),
             committed: AtomicField::new(FieldConfig {
                 index_max: block_size,
                 version: 0,
                 index: block_size,
-            }),
+            }).into(),
             reserved: AtomicField::new(FieldConfig {
                 index_max: block_size,
                 version: 0,
                 index: block_size,
-            }),
+            }).into(),
             consumed: AtomicField::new(FieldConfig {
                 index_max: block_size,
                 version: 0,
                 index: block_size,
-            }),
+            }).into(),
             entries: Box::into_raw({
                 let mut vec = Vec::with_capacity(block_size);
                 vec.extend((0..block_size).map(|_| MaybeUninit::uninit()));

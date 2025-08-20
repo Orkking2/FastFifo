@@ -1,0 +1,236 @@
+#[cfg(feature = "debug")]
+use tracing::{info, instrument, warn};
+
+use crate::{
+    Result,
+    block::{Block, ReserveState},
+    config::{FifoTag, IndexedDrop},
+    entry_descriptor::EntryDescriptor,
+    error::Error,
+    field::Field,
+    field::FieldConfig,
+    head::{Atomic, AtomicHead, NonAtomicHead},
+};
+
+pub(crate) struct FastFifoInner<Tag: FifoTag, Inner: IndexedDrop<Tag>> {
+    // num_heads == Tag::num_transformations()
+    heads: Box<[Box<dyn Atomic>]>,
+    blocks: Box<[Block<Tag, Inner>]>,
+    num_blocks: usize,
+    block_size: usize,
+}
+
+#[rustfmt::skip]
+unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag>> Send for FastFifoInner<Tag, Inner> {}
+#[rustfmt::skip]
+unsafe impl<Tag: FifoTag, Inner: IndexedDrop<Tag>> Sync for FastFifoInner<Tag, Inner> {}
+
+#[derive(Debug)]
+enum AdvanceHeadStatus {
+    Busy,
+    Success,
+}
+
+impl<Tag: FifoTag + 'static, Inner: IndexedDrop<Tag>> FastFifoInner<Tag, Inner> {
+    #[cfg_attr(feature = "debug", instrument)]
+    pub fn new_in(num_blocks: usize, block_size: usize) -> Self
+    where
+        Inner: Default,
+    {
+        Self {
+            heads: {
+                let mut vec = Vec::new();
+                vec.reserve(Tag::num_transformations());
+
+                vec.extend((0..Tag::num_transformations()).map(|i| {
+                    let tag = Tag::try_from(i).unwrap();
+
+                    let field = Field::from_parts(num_blocks, 0, 0);
+
+                    #[cfg(feature = "debug")]
+                    info!("Head[{i}] = {field:?}");
+
+                    if tag.is_atomic() {
+                        Box::new(AtomicHead::from(field)) as Box<dyn Atomic>
+                    } else {
+                        Box::new(NonAtomicHead::from(field))
+                    }
+                }));
+
+                vec.into_boxed_slice()
+            },
+            blocks: {
+                let mut vec = Vec::new();
+                vec.reserve(num_blocks);
+
+                vec.extend((0..num_blocks).map(|i| {
+                    #[cfg(feature = "debug")]
+                    info!("Init block {i}");
+                    let _ = i;
+
+                    Block::new_in(block_size)
+                }));
+
+                vec.into_boxed_slice()
+            },
+            num_blocks,
+            block_size,
+        }
+    }
+}
+
+impl<Tag: FifoTag, Inner: IndexedDrop<Tag>> FastFifoInner<Tag, Inner> {
+    fn get_head(&self, tag: Tag) -> &dyn Atomic {
+        // Safety: this pointer can be turned into a reference because I said so.
+        self.heads.as_ref().get(tag.into()).unwrap().as_ref()
+    }
+
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
+    fn get_block(&self, tag: Tag) -> (Field, &Block<Tag, Inner>) {
+        let head = self.get_head(tag).load();
+        #[cfg(feature = "debug")]
+        info!(?head);
+
+        (head.clone(), &self.blocks.as_ref()[head.get_index()])
+    }
+
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
+    pub fn get_entry(&self, tag: Tag) -> Result<EntryDescriptor<'_, Tag, Inner>> {
+        //         v [2].give (1)
+        //         |         v [2].take (2)
+        //         |         |           v [1].give (3)
+        //         |         |           |          v [1].take (4)
+        //         |         |           |          |          v [0].give (5)
+        //         |         |           |          |          |          v [0].take (6)
+        // [Uninit, Reserved, Post_Trans, Mid_Trans, Pre_Trans, Allocated, Uninit] ->
+
+        loop {
+            let (head, block) = self.get_block(tag);
+
+            match block.reserve_in_layer(tag) {
+                ReserveState::Success(entry_descriptor) => {
+                    #[cfg(feature = "debug")]
+                    info!(
+                        "Success, block[{}][{}]",
+                        head.get_index(),
+                        entry_descriptor.index,
+                    );
+                    break Ok(entry_descriptor);
+                }
+                ReserveState::NotAvailable => {
+                    break Err(Error::NotAvailable);
+                }
+                ReserveState::Busy => {
+                    break Err(Error::Busy);
+                }
+                ReserveState::BlockDone => match self.advance_head(head, tag) {
+                    AdvanceHeadStatus::Busy => {
+                        break Err(Error::Busy);
+                    }
+                    AdvanceHeadStatus::Success => {
+                        continue;
+                    }
+                },
+            }
+        }
+    }
+
+    #[cfg_attr(feature = "debug", instrument(skip(self, tag)))]
+    fn advance_head(&self, head: Field, tag: Tag) -> AdvanceHeadStatus {
+        let (next_current, next_chasing) =
+            self.blocks.as_ref()[(head.get_index() + 1) % self.num_blocks].get_current_chasing(tag);
+
+        let chasing_give = next_chasing.load_give();
+
+        #[cfg(feature = "debug")]
+        info!(?chasing_give);
+
+        if let AdvanceHeadStatus::Success = if chasing_give.get_index() >= self.num_blocks {
+            #[cfg(feature = "debug")]
+            info!("Success (early)");
+
+            // Guaranteed to be able to advance to next block, early escape
+            AdvanceHeadStatus::Success
+        } else {
+            // `give`s are AcqRel symantics, the release of the previous `give` guarantees
+            // that `take.index` (which is incremented previously to the `give`s release)
+            // is at least `give.index`, that is, chasing_give.index <= chasing_take.index is always true.
+            let chasing_take = next_chasing.load_take();
+
+            #[cfg(feature = "debug")]
+            info!(?chasing_take);
+
+            if chasing_take.get_index() > chasing_give.get_index() {
+                #[cfg(feature = "debug")]
+                warn!("Busy");
+
+                // The pair we are chasing is currently writing
+                // We do not know in which slot they are writing
+                // We must assume that every entry is garbage
+                AdvanceHeadStatus::Busy
+            } else {
+                #[cfg(feature = "debug")]
+                info!("Success");
+
+                // MUST be chasing_take == chasing_give, the valid state to advance this head
+                AdvanceHeadStatus::Success
+            }
+        } {
+            // Success, update atomics in nblk and cached head
+
+            let next_current_give = next_current.load_give();
+            #[cfg(feature = "debug")]
+            info!(?next_current_give);
+
+            let new_next_current = Field::from(FieldConfig {
+                index_max: self.block_size,
+                version: head.get_version()
+                    + if next_current_give.get_index() >= next_current_give.get_index_max() {
+                        1
+                    } else {
+                        0
+                    },
+                index: 0,
+            });
+            #[cfg(feature = "debug")]
+            info!(?new_next_current);
+
+            let (old_give, old_take) = next_current.fetch_max_both(new_next_current);
+            #[cfg(feature = "debug")]
+            info!(?old_give, ?old_take);
+            let (_, _) = (old_give, old_take);
+
+            let head_vsn_inc_add = head.version_inc_add(1);
+            #[cfg(feature = "debug")]
+            info!(?head_vsn_inc_add);
+
+            let old_head = self.get_head(tag).max(head_vsn_inc_add);
+            #[cfg(feature = "debug")]
+            info!(?old_head);
+            let _ = old_head;
+
+            // Forward success
+            AdvanceHeadStatus::Success
+        } else {
+            // Forward busy
+            AdvanceHeadStatus::Busy
+        }
+    }
+}
+
+// impl<Tag: FifoTag, Inner: IndexedDrop<Tag>  > Drop
+//     for FastFifoInner<Tag, Inner >
+// {
+//     fn drop(&mut self) {
+//         let Self {
+//             heads,
+//             blocks,
+//             num_blocks,
+//             block_size,
+//             // alloc,
+//         } = self;
+
+//         let _ = num_blocks;
+//         let _ = block_size;
+//     }
+// }

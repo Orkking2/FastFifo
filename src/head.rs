@@ -1,4 +1,4 @@
-use crate::field::Field;
+use crate::{atom_pair::Line128, field::Field};
 
 #[cfg(not(loom))]
 use std::{
@@ -57,14 +57,14 @@ impl Atomic for NonAtomicHead {
 #[repr(C)]
 pub struct AtomicHead {
     index_max: usize,
-    inner: AtomicUsize,
+    inner: Line128<AtomicUsize>,
 }
 
 impl From<Field> for AtomicHead {
     fn from(value: Field) -> Self {
         Self {
             index_max: value.get_index_max(),
-            inner: AtomicUsize::new(value.get_raw_inner()),
+            inner: AtomicUsize::new(value.get_raw_inner()).into(),
         }
     }
 }

@@ -226,11 +226,12 @@ pub(crate) fn do_generate_union(
         return quote! { compile_error!("Must have at least two layers!") };
     }
 
-    let fifo_path = quote! { ::fastfifo };
-    let fifo_config_path = quote! { #fifo_path ::config };
-    let entry_descriptor = quote! { #fifo_path ::entry_descriptor::EntryDescriptor };
+    let lib_path = quote! { ::fastfifo };
+    let fifo_path = quote! { #lib_path ::fifo };
+    let fifo_config_path = quote! { #lib_path ::config };
+    let entry_descriptor = quote! { #lib_path ::entry_descriptor::EntryDescriptor };
     let manually_drop = quote! { ::core::mem::ManuallyDrop };
-    let result = quote! { #fifo_path ::Result };
+    let result = quote! { #lib_path ::Result };
     // let std_alloc = quote! { ::std::alloc };
 
     let (impl_generic, ty_generic, where_clause) = generics.split_for_impl();
@@ -308,6 +309,13 @@ pub(crate) fn do_generate_union(
         })
         .collect::<Vec<_>>();
 
+    let transform_in_place_fn = quote! {
+        #[allow(dead_code)]
+        pub fn transform_in_place<F: ::std::ops::FnOnce(*mut #name #ty_generic)>(&mut self, transformer: F) {
+            self.0.modify_t_in_place(transformer);
+        }
+    };
+
     let variant_impls = izip!(
         &variant_entries,
         &chases_types,
@@ -327,9 +335,10 @@ pub(crate) fn do_generate_union(
         } else if is_unit(ty) {
             quote! {
                 impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #where_clause {
+                    #transform_in_place_fn
                     #[allow(dead_code)]
                     pub fn transform<F: #transform_trait>(&mut self, transformer: F) {
-                        self.0.modify_t_in_place(|ptr| unsafe {
+                        self.transform_in_place(|ptr| unsafe {
                             transformer(<#manually_drop ::<#chases_type>>::into_inner (ptr.read().#chases_field_name))
                         })
                     }
@@ -338,9 +347,10 @@ pub(crate) fn do_generate_union(
         } else if is_unit(chases_type) {
             quote! {
                 impl #lifetime_impl_generic #variant_entry #lifetime_ty_generic #where_clause {
+                    #transform_in_place_fn
                     #[allow(dead_code)]
                     pub fn transform<F: #transform_trait>(&mut self, transformer: F) {
-                        self.0.modify_t_in_place(|ptr| unsafe { ptr.write(
+                        self.transform_in_place(|ptr| unsafe { ptr.write(
                             #name {
                                 #field_name : #manually_drop ::new(transformer())
                             }

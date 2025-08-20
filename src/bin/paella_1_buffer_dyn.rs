@@ -13,12 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{Level, info, span};
-use tracing_appender::non_blocking::{self, NonBlockingBuilder};
+use tracing_appender::non_blocking::NonBlockingBuilder;
 use tracing_subscriber::{
-    EnvFilter, Registry,
-    fmt::{Layer, layer},
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
+    EnvFilter, Registry, fmt::layer, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 #[derive(Parser, Debug)]
@@ -71,9 +68,11 @@ fn main() {
         block_size,
         num_blocks,
     } = Cli::parse();
-    let log_path = PathBuf::new()
-        .join("logs")
-        .join(log_file.unwrap_or("paella_1_buffer_dyn.log".to_string()));
+
+    let log_path = PathBuf::new().join("logs").join(format!(
+        "{}.log",
+        log_file.unwrap_or("paella_1_buffer_dyn".to_string())
+    ));
 
     let log_file = File::create(log_path).unwrap();
 
